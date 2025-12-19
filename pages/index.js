@@ -630,7 +630,7 @@ export default function Home() {
       <div className="container">
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
           <img
-            src="/frostdesk-logo.png"
+            src="/frostdesk-logo.svg"
             alt="FrostDesk"
             style={{
               width: 72,
