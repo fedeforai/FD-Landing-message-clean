@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FrostDesk Booking</title>
 
-  <!-- Supabase client (UMD) -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-
   <style>
     body {
       margin: 0;
@@ -123,6 +120,7 @@
       border-radius: 16px;
       object-fit: cover;
       margin-bottom: 14px;
+      background: #0e0f12;
     }
 
     #success {
@@ -140,6 +138,7 @@
       margin-top: 12px;
       display: none;
       font-size: 14px;
+      white-space: pre-wrap;
     }
 
     #altBox { display: none; }
@@ -289,7 +288,7 @@
 
   <label>Seleziona il maestro</label>
   <select id="instructorSelect">
-    <option value="">Scegli un maestro</option>
+    <option value="">Caricamento maestri...</option>
   </select>
 
   <div id="instructorCard" class="card" style="display:none;">
@@ -312,7 +311,7 @@
   </form>
 
   <p id="success">Messaggio inviato con successo.</p>
-  <p id="errorMsg">Errore nell'invio, controlla la console.</p>
+  <p id="errorMsg">Errore</p>
 
   <div id="altBox" class="card">
     <h3 style="margin:0 0 10px 0;">Risposta</h3>
@@ -343,28 +342,38 @@
 <script>
   /* =========================
      CONFIG
-     ========================= */
-  const SUPABASE_URL = "https://ncvkipizapkhawnaqssm.supabase.co";
-  const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5jdmtpcGl6YXBraGF3bmFxc3NtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ4NjY3ODcsImV4cCI6MjA4MDQ0Mjc4N30.sx3o0u4Me8zc-tDt_abt3Q8PMORfgFu7xSzFUZjlBEM";
+     =========================
 
-  // Endpoint principale Make (A0→A5, B/C/D/E)
+     Questa versione NON legge Supabase dal browser.
+     Carica i maestri da un endpoint server (es: /api/instructors) cosi su Vercel non hai problemi di RLS/permessi.
+
+     Backend atteso:
+       GET /api/instructors
+         -> { ok: true, data: [{ id, name, photo_url, bio, calendar_id }] }
+       GET /api/instructors?id=<UUID>
+         -> { ok: true, data: { id, name, photo_url, bio, calendar_id } }
+
+     Se l'endpoint sta su un altro dominio, metti l'URL completo in INSTRUCTORS_API_URL.
+  */
+
+  const INSTRUCTORS_API_URL = "/api/instructors";
+
+  // Endpoint principale Make
   const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/8eo529jglgiqrehsdm0k8rtul68jsmox";
+
   // Endpoint conferma booking (alternative)
   const MAKE_CONFIRM_WEBHOOK_URL = "PASTE_CONFIRM_WEBHOOK";
+
   // Endpoint mini chat (raccolta campi mancanti)
   const MAKE_CHAT_WEBHOOK_URL = "PASTE_CHAT_WEBHOOK";
-
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
   /* =========================
      CONVERSATION ID (persistente)
      ========================= */
   const CONVERSATION_KEY = "fd_conversation_id";
-
   function getConversationId() {
     return localStorage.getItem(CONVERSATION_KEY);
   }
-
   function setConversationId(id) {
     if (id) localStorage.setItem(CONVERSATION_KEY, id);
   }
@@ -387,9 +396,6 @@
   let successEl, errorEl, altBox, altMsg, altList, altMeta, sendBtn, instructorSelect, bookingForm;
   let chatOverlay, chatClose, chatBody, chatInput, chatSend, chatMeta;
 
-  /* =========================
-     DOMContentLoaded
-     ========================= */
   window.addEventListener("DOMContentLoaded", () => {
     // Main UI
     successEl = document.getElementById("success");
@@ -424,6 +430,7 @@
 
     chatSessionId = getOrCreateChatSessionId();
 
+    resetFeedback();
     loadInstructors();
   });
 
@@ -455,6 +462,11 @@
     return (v ?? "").toString();
   }
 
+  function showError(message) {
+    errorEl.textContent = message || "Errore";
+    errorEl.style.display = "block";
+  }
+
   function isSchemaString(v) {
     if (!v) return false;
     const s = v.toString().trim();
@@ -475,20 +487,13 @@
     altMeta.textContent = "";
   }
 
-  function showError(message) {
-    errorEl.textContent = message || "Errore";
-    errorEl.style.display = "block";
-  }
-
   function formatSlot(startISO, endISO) {
     try {
       const start = new Date(startISO);
       const end = new Date(endISO);
-
       const date = start.toLocaleDateString("it-IT", { day: "2-digit", month: "long" });
       const startTime = start.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
       const endTime = end.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
-
       return `${date} · ${startTime} - ${endTime}`;
     } catch {
       return "Alternativa disponibile";
@@ -508,7 +513,6 @@
 
   function openChat(initialAiMessage, missingFields) {
     chatMissingFields = Array.isArray(missingFields) ? missingFields : [];
-
     chatOverlay.style.display = "flex";
     chatBody.innerHTML = "";
 
@@ -544,7 +548,7 @@
     const userText = safeText(chatInput.value).trim();
     if (!userText) return;
 
-    if (!MAKE_CHAT_WEBHOOK_URL) {
+    if (!MAKE_CHAT_WEBHOOK_URL || MAKE_CHAT_WEBHOOK_URL.includes("PASTE_")) {
       addChatMsg("ai", "Manca MAKE_CHAT_WEBHOOK_URL. Incolla l'URL del webhook mini chat.");
       return;
     }
@@ -600,13 +604,11 @@
 
         setTimeout(async () => {
           closeChat();
-
           const merged = {
             ...lastBasePayload,
             ...chatDraftFields,
             message: lastBasePayload?.message || ""
           };
-
           await callMakeEndpoint(merged);
         }, 300);
       }
@@ -620,28 +622,53 @@
   }
 
   /* =========================
-     SUPABASE: INSTRUCTORS
+     INSTRUCTORS (via API)
      ========================= */
-  async function loadInstructors() {
-    try {
-      const { data, error } = await supabase
-        .from("instructors")
-        .select("*")
-        .order("name", { ascending: true });
+  function setInstructorLoading() {
+    instructorSelect.innerHTML = '<option value="">Caricamento maestri...</option>';
+    instructorSelect.disabled = true;
+  }
 
-      if (error) {
-        console.error("Errore Supabase instructors:", error);
+  function setInstructorReady(hasItems) {
+    instructorSelect.disabled = false;
+    if (!hasItems) {
+      instructorSelect.innerHTML = '<option value="">Nessun maestro disponibile</option>';
+    }
+  }
+
+  async function loadInstructors() {
+    setInstructorLoading();
+
+    try {
+      const res = await fetch(INSTRUCTORS_API_URL, { method: "GET" });
+      const json = await res.json().catch(() => ({}));
+
+      if (!res.ok || !json || json.ok !== true) {
+        const msg = json?.error ? String(json.error) : ("HTTP " + res.status);
+        showError("Non riesco a caricare la lista maestri.\n" + msg);
+        setInstructorReady(false);
         return;
       }
 
+      const data = Array.isArray(json.data) ? json.data : [];
+      if (data.length === 0) {
+        setInstructorReady(false);
+        return;
+      }
+
+      instructorSelect.innerHTML = '<option value="">Scegli un maestro</option>';
       data.forEach(inst => {
         const opt = document.createElement("option");
         opt.value = inst.id;
-        opt.textContent = inst.name;
+        opt.textContent = inst.name || "Maestro";
         instructorSelect.appendChild(opt);
       });
+
+      setInstructorReady(true);
     } catch (err) {
-      console.error("Errore in loadInstructors:", err);
+      console.error("Errore loadInstructors:", err);
+      showError("Errore rete nel caricamento maestri.");
+      setInstructorReady(false);
     }
   }
 
@@ -649,29 +676,35 @@
     resetFeedback();
 
     const id = instructorSelect.value;
-    if (!id) return;
+    if (!id) {
+      selectedInstructor = null;
+      document.getElementById("instructorCard").style.display = "none";
+      return;
+    }
 
     try {
-      const { data, error } = await supabase
-        .from("instructors")
-        .select("*")
-        .eq("id", id)
-        .single();
+      const url = INSTRUCTORS_API_URL + "?id=" + encodeURIComponent(id);
+      const res = await fetch(url, { method: "GET" });
+      const json = await res.json().catch(() => ({}));
 
-      if (error) {
-        console.error("Errore Supabase loadInstructor:", error);
+      if (!res.ok || !json || json.ok !== true || !json.data) {
+        const msg = json?.error ? String(json.error) : ("HTTP " + res.status);
+        showError("Errore caricamento maestro selezionato.\n" + msg);
         return;
       }
 
+      const data = json.data;
       selectedInstructor = data;
 
       const card = document.getElementById("instructorCard");
       card.style.display = "block";
+
       document.getElementById("photo").src = data.photo_url || "";
       document.getElementById("name").textContent = data.name || "";
       document.getElementById("bio").textContent = data.bio || "";
     } catch (err) {
-      console.error("Errore in loadInstructor:", err);
+      console.error("Errore loadInstructor:", err);
+      showError("Errore rete nel caricamento maestro.");
     }
   }
 
@@ -725,7 +758,7 @@
       if (contentType.includes("application/json")) data = await res.json();
       else data = { ok: res.ok, message: await res.text() };
 
-      if (data.conversation_id) {
+      if (data && data.conversation_id) {
         setConversationId(data.conversation_id);
       }
 
@@ -737,14 +770,12 @@
 
       const normalizedMsg = normalizeMessage(data?.message);
 
-      // status "ask_info" → solo risposta informativa
       if (data?.status === "ask_info") {
         showMessageOnly(normalizedMsg);
         setSending(false);
         return;
       }
 
-      // status "need_more_info" → apri mini chat
       if (data?.status === "need_more_info") {
         const mf = Array.isArray(data?.missing_fields) ? data.missing_fields : [];
         openChat(normalizedMsg, mf);
@@ -752,7 +783,6 @@
         return;
       }
 
-      // status "slot_busy" → alternative
       if (data?.status === "slot_busy") {
         const alts = Array.isArray(data?.alternatives) ? data.alternatives : [];
         renderAlternatives(normalizedMsg, alts);
@@ -760,7 +790,6 @@
         return;
       }
 
-      // status "ready_to_check" o "confirmed" → ok
       if (data?.ok === true) {
         successEl.textContent = normalizedMsg || "Richiesta inviata con successo.";
         successEl.style.display = "block";
@@ -768,10 +797,8 @@
         return;
       }
 
-      // fallback
       showMessageOnly(normalizedMsg);
       setSending(false);
-
     } catch (err) {
       console.error("Errore fetch verso Make:", err);
       showError("Errore rete.");
@@ -782,21 +809,19 @@
   /* =========================
      SLOT BUSY: ALTERNATIVES
      ========================= */
-
-
   function renderAlternatives(message, alternatives) {
     altBox.style.display = "block";
     altMsg.textContent = message || "Quello slot è già occupato. Ti propongo alcune alternative:";
     altList.innerHTML = "";
     altMeta.textContent = "";
 
-    const firstTwo = alternatives.slice(0, 2);
+    const firstTwo = (alternatives || []).slice(0, 2);
 
     firstTwo.forEach((a) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "button secondary";
-      btn.textContent = formatSlot(a.start_time, a.end_time); // ← usa start_time / end_time
+      btn.textContent = formatSlot(a.start_time, a.end_time);
 
       btn.onclick = async () => {
         resetFeedback();
@@ -820,12 +845,11 @@
     }
   }
 
-
   /* =========================
      CONFIRM BOOKING
      ========================= */
   async function confirmBooking(payload) {
-    if (!MAKE_CONFIRM_WEBHOOK_URL) {
+    if (!MAKE_CONFIRM_WEBHOOK_URL || MAKE_CONFIRM_WEBHOOK_URL.includes("PASTE_")) {
       showError("Manca MAKE_CONFIRM_WEBHOOK_URL. Incolla l'URL del webhook di conferma.");
       return;
     }
@@ -863,7 +887,6 @@
 
       altMeta.textContent = lines.join(" | ");
       altBox.style.display = "block";
-
     } catch (err) {
       console.error("Errore confirmBooking:", err);
       showError("Errore rete nella conferma.");
