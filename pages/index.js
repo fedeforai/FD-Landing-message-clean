@@ -58,6 +58,12 @@ function formatSlot(startISO, endISO) {
   }
 }
 
+function getClientTZ() {
+  return typeof Intl !== "undefined"
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : "Europe/Rome";
+}
+
 export default function Home() {
   // stato principale
   const [instructors, setInstructors] = useState([]);
@@ -78,7 +84,7 @@ export default function Home() {
 
   const [sending, setSending] = useState(false);
 
-  // mini‑chat
+  // mini-chat
   const [chatOpen, setChatOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatText, setChatText] = useState("");
@@ -88,6 +94,9 @@ export default function Home() {
   const [chatSessionId, setChatSessionIdState] = useState(null);
 
   const [lastBasePayload, setLastBasePayload] = useState(null);
+
+  // debug leggero per capire Make
+  const [debug, setDebug] = useState(null);
 
   const chatBodyRef = useRef(null);
 
@@ -104,6 +113,7 @@ export default function Home() {
     setAltMsg("");
     setAltMeta("");
     setAltAlternatives([]);
+    setDebug(null);
   }
 
   async function loadInstructors() {
@@ -160,6 +170,44 @@ export default function Home() {
     }
   }
 
+  function applyChip(text) {
+    const add = String(text || "").trim();
+    if (!add) return;
+    setMessage((prev) => {
+      const p = safeText(prev).trim();
+      if (!p) return add;
+      if (p.endsWith("\n")) return p + add;
+      return p + "\n" + add;
+    });
+  }
+
+  function applyMessageTemplate() {
+    const template = "Domani 10:00, 2 ore, 2 persone, intermedio, Meeting Point Mottolino";
+    setMessage((prev) => {
+      const p = safeText(prev).trim();
+      return p ? p : template;
+    });
+  }
+
+  // heuristics super light per checklist
+  function guessChecklist(msg) {
+    const m = safeText(msg).toLowerCase();
+    const hasPeople = /\b(\d+)\s*(persone|people|pax)\b/.test(m) || /\b(1|2|3|4|5)\b/.test(m);
+    const hasLevel = /\b(principiante|beginner|intermedio|intermediate|avanzato|advanced)\b/.test(m);
+    const hasDuration = /\b(\d+)\s*(h|hr|hrs|ore|hours|min|mins|minuti)\b/.test(m) || /\b(1h|2h|3h)\b/.test(m);
+    const hasTime = /\b\d{1,2}[:.]\d{2}\b/.test(m) || /\b(mattina|pomeriggio|morning|afternoon)\b/.test(m);
+    const hasDate = /\b(oggi|domani|sabato|domenica|lunedì|martedì|mercoledì|giovedì|venerdì|today|tomorrow|sat|sun|mon|tue|wed|thu|fri|next)\b/.test(m) || /\b\d{1,2}\/\d{1,2}\b/.test(m);
+    const hasLocation = /\b(meeting point|meeting|mottolino|carosello|centro|hotel|lift|funivia|piazza)\b/.test(m);
+
+    return {
+      dateTime: hasDate && hasTime,
+      duration: hasDuration,
+      location: hasLocation,
+      level: hasLevel,
+      participants: hasPeople,
+    };
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
     resetFeedback();
@@ -177,10 +225,7 @@ export default function Home() {
       name: safeText(customerName),
       phone: safeText(phone),
       message: safeText(message),
-      client_tz:
-        typeof Intl !== "undefined"
-          ? Intl.DateTimeFormat().resolvedOptions().timeZone
-          : "Europe/Rome",
+      client_tz: getClientTZ(),
       source: "landing",
     };
 
@@ -203,6 +248,13 @@ export default function Home() {
       let data;
       if (contentType.includes("application/json")) data = await res.json();
       else data = { ok: res.ok, message: await res.text() };
+
+      // debug minimo utile
+      setDebug({
+        ok: !!data?.ok,
+        status: data?.status || null,
+        missing_fields: Array.isArray(data?.missing_fields) ? data.missing_fields : null,
+      });
 
       if (data && data.conversation_id) {
         setConversationId(data.conversation_id);
@@ -255,16 +307,12 @@ export default function Home() {
 
   function renderAlternatives(message, alternatives) {
     setAltVisible(true);
-    setAltMsg(
-      message || "Quello slot è già occupato. Ti propongo alcune alternative:"
-    );
+    setAltMsg(message || "Quello slot è già occupato. Ti propongo alcune alternative:");
     const firstTwo = (alternatives || []).slice(0, 2);
     setAltAlternatives(firstTwo);
 
     if (firstTwo.length === 0) {
-      setAltMsg(
-        "Mi dispiace, ma non ho alternative immediate. Puoi indicarmi un altro orario?"
-      );
+      setAltMsg("Mi dispiace, ma non ho alternative immediate. Puoi indicarmi un altro orario?");
     }
   }
 
@@ -315,10 +363,7 @@ export default function Home() {
   function openChat(initialAiMessage, missingFields) {
     setChatMissingFields(Array.isArray(missingFields) ? missingFields : []);
     setChatMessages([
-      {
-        role: "ai",
-        text: initialAiMessage || "Dimmi pure i dettagli mancanti.",
-      },
+      { role: "ai", text: initialAiMessage || "Dimmi pure i dettagli mancanti." },
     ]);
     setChatOpen(true);
     setTimeout(scrollChatToBottom, 50);
@@ -343,10 +388,7 @@ export default function Home() {
     if (!userText) return;
 
     if (!MAKE_CHAT_WEBHOOK_URL || MAKE_CHAT_WEBHOOK_URL.includes("PASTE_")) {
-      addChatMsg(
-        "ai",
-        "Manca MAKE_CHAT_WEBHOOK_URL. Incolla l'URL del webhook mini chat."
-      );
+      addChatMsg("ai", "Manca MAKE_CHAT_WEBHOOK_URL. Incolla l'URL del webhook mini chat.");
       return;
     }
 
@@ -366,11 +408,7 @@ export default function Home() {
         original_message: lastBasePayload?.message || null,
         missing_fields: chatMissingFields,
         user_message: userText,
-        client_tz:
-          lastBasePayload?.client_tz ||
-          (typeof Intl !== "undefined"
-            ? Intl.DateTimeFormat().resolvedOptions().timeZone
-            : "Europe/Rome"),
+        client_tz: lastBasePayload?.client_tz || getClientTZ(),
         source: "landing_chat",
       };
 
@@ -386,10 +424,7 @@ export default function Home() {
       else data = { ok: res.ok, message: await res.text() };
 
       if (!res.ok) {
-        addChatMsg(
-          "ai",
-          normalizeMessage(data?.message) || "Errore nella chat."
-        );
+        addChatMsg("ai", normalizeMessage(data?.message) || "Errore nella chat.");
         setChatSending(false);
         return;
       }
@@ -397,24 +432,18 @@ export default function Home() {
       addChatMsg("ai", normalizeMessage(data?.message));
 
       if (Array.isArray(data?.missing_fields)) {
-        const mf = data.missing_fields;
-        setChatMissingFields(mf);
+        setChatMissingFields(data.missing_fields);
       }
 
       if (data?.is_complete === true) {
-        const uf =
-          data?.updated_fields && typeof data.updated_fields === "object"
-            ? data.updated_fields
-            : {};
+        const uf = data?.updated_fields && typeof data.updated_fields === "object"
+          ? data.updated_fields
+          : {};
         setChatDraftFields((prev) => ({ ...prev, ...uf }));
 
         setTimeout(async () => {
           closeChat();
-          const merged = {
-            ...lastBasePayload,
-            ...uf,
-            message: lastBasePayload?.message || "",
-          };
+          const merged = { ...lastBasePayload, ...uf, message: lastBasePayload?.message || "" };
           await callMakeEndpoint(merged);
         }, 300);
       }
@@ -433,28 +462,43 @@ export default function Home() {
       ? "Mi servono: " + chatMissingFields.join(", ")
       : "Rispondi qui con i dettagli.";
 
+  const checklist = guessChecklist(message);
+
   return (
     <>
       <Head>
         <title>FrostDesk Booking</title>
-        <meta charSet="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="description" content="Prenota una lezione di sci in 30 secondi. FrostDesk controlla l’agenda del maestro e gestisce la richiesta." />
+        <meta name="author" content="FrostDesk" />
+        <meta property="og:title" content="FrostDesk Booking" />
+        <meta property="og:description" content="Scrivi al maestro. FrostDesk controlla l’agenda e ti propone subito lo slot giusto." />
+        <meta property="og:type" content="website" />
+        <meta property="og:image" content="/og-image.png" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:image" content="/og-image.png" />
+        <link rel="icon" href="/favicon.ico" />
         <style>{`
           body {
             margin: 0;
             padding: 0;
-            background-color: #0e0f12;
+            background: radial-gradient(1200px 600px at 20% 0%, rgba(59,130,246,0.18), transparent 60%),
+                        radial-gradient(900px 500px at 90% 10%, rgba(99,102,241,0.14), transparent 55%),
+                        radial-gradient(900px 500px at 50% 100%, rgba(16,185,129,0.08), transparent 60%),
+                        #0b0c0f;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             color: #e5e7eb;
           }
           .container {
             max-width: 560px;
             margin: 0 auto;
-            padding: 32px;
-            background: #1a1d22;
-            margin-top: 48px;
-            border-radius: 24px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            padding: 34px;
+            background: rgba(17, 19, 24, 0.78);
+            margin-top: 56px;
+            border-radius: 26px;
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
             animation: fadeIn 0.6s ease;
           }
           @keyframes fadeIn {
@@ -463,18 +507,119 @@ export default function Home() {
           }
           h1 {
             text-align: center;
-            font-size: 32px;
-            font-weight: 700;
+            font-size: 34px;
+            font-weight: 800;
             margin-bottom: 10px;
             color: #ffffff;
             letter-spacing: -0.5px;
+            text-shadow: 0 8px 30px rgba(0,0,0,0.35);
           }
           p.subtitle {
             text-align: center;
             color: #9ca3af;
-            margin-bottom: 32px;
+            margin-bottom: 22px;
             font-size: 15px;
           }
+          .hint {
+            margin: 10px 0 18px 0;
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid #2f333a;
+            background: linear-gradient(180deg, rgba(14,15,18,0.75), rgba(14,15,18,0.45));
+            color: #cbd5e1;
+            font-size: 13px;
+            line-height: 1.35;
+          }
+          .fieldHelp {
+            margin-top: 10px;
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid #2f333a;
+            background: #0e0f12;
+            color: #cbd5e1;
+            font-size: 13px;
+            line-height: 1.35;
+          }
+          .fieldHelpTop {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 8px;
+          }
+          .fieldHelpTitle {
+            font-weight: 700;
+            color: #e5e7eb;
+            font-size: 13px;
+          }
+          .miniBtn {
+            border: 1px solid #2f333a;
+            background: #111318;
+            color: #e5e7eb;
+            border-radius: 999px;
+            padding: 8px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: 0.2s ease;
+            white-space: nowrap;
+          }
+          .miniBtn:hover {
+            background: #171a22;
+            transform: translateY(-1px);
+          }
+          .exampleBox {
+            margin-top: 8px;
+            border-radius: 12px;
+            border: 1px solid #2f333a;
+            background: #111318;
+            padding: 10px 12px;
+            color: #e5e7eb;
+            font-size: 13px;
+          }
+          .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+          }
+          .chip {
+            cursor: pointer;
+            border: 1px solid #2f333a;
+            background: #0e0f12;
+            color: #e5e7eb;
+            border-radius: 999px;
+            padding: 8px 10px;
+            font-size: 12px;
+            transition: 0.2s ease;
+          }
+          .chip:hover {
+            background: #171a22;
+            transform: translateY(-1px);
+          }
+          .checklist {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+          }
+          .checkItem {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid #2f333a;
+            background: #111318;
+            font-size: 12px;
+            color: #cbd5e1;
+          }
+          .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: #374151;
+          }
+          .dot.ok { background: #22c55e; }
           label {
             font-weight: 600;
             display: block;
@@ -509,7 +654,7 @@ export default function Home() {
             border: none;
             border-radius: 14px;
             cursor: pointer;
-            font-weight: 600;
+            font-weight: 700;
             transition: 0.25s ease;
           }
           .button:hover {
@@ -542,6 +687,23 @@ export default function Home() {
             margin-bottom: 14px;
             background: #0e0f12;
           }
+          .smallMuted {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #9ca3af;
+          }
+          #success { color: #22c55e; margin-top: 18px; white-space: pre-wrap; }
+          #errorMsg { color: #f87171; margin-top: 18px; white-space: pre-wrap; }
+          .debug {
+            margin-top: 12px;
+            font-size: 12px;
+            color: #9ca3af;
+            background: #111318;
+            border: 1px solid #2f333a;
+            border-radius: 14px;
+            padding: 10px 12px;
+            white-space: pre-wrap;
+          }
           #chatOverlay {
             position: fixed;
             inset: 0;
@@ -554,9 +716,7 @@ export default function Home() {
             box-sizing: border-box;
             display: none;
           }
-          #chatOverlay.open {
-            display: flex;
-          }
+          #chatOverlay.open { display: flex; }
           #chatModal {
             width: 100%;
             max-width: 560px;
@@ -574,11 +734,7 @@ export default function Home() {
             border-bottom: 1px solid #2f333a;
             background: #0e0f12;
           }
-          #chatHeaderTitle {
-            font-weight: 700;
-            font-size: 14px;
-            color: #e5e7eb;
-          }
+          #chatHeaderTitle { font-weight: 800; font-size: 14px; color: #e5e7eb; }
           #chatClose {
             background: transparent;
             border: 1px solid #2f333a;
@@ -588,9 +744,7 @@ export default function Home() {
             cursor: pointer;
             font-size: 12px;
           }
-          #chatClose:hover {
-            background: #171a22;
-          }
+          #chatClose:hover { background: #171a22; }
           #chatBody {
             padding: 14px 16px;
             height: 320px;
@@ -607,14 +761,14 @@ export default function Home() {
             white-space: pre-wrap;
             word-break: break-word;
           }
-          .chatMsg.ai {
+          .chatMsg.ai { background: #0e0f12; color: #e5e7eb; }
+          .chatMsg.user { background: #1a1d22; color: #ffffff; border-color: #3d414a; }
+          #chatMeta {
+            padding: 10px 16px;
+            border-top: 1px solid #2f333a;
             background: #0e0f12;
-            color: #e5e7eb;
-          }
-          .chatMsg.user {
-            background: #1a1d22;
-            color: #ffffff;
-            border-color: #3d414a;
+            font-size: 12px;
+            color: #9ca3af;
           }
           #chatFooter {
             display: flex;
@@ -624,13 +778,33 @@ export default function Home() {
             background: #0e0f12;
             box-sizing: border-box;
           }
+          #chatInput {
+            flex: 1;
+            padding: 12px;
+            font-size: 14px;
+            background: #24272e;
+            border: 1px solid #3d414a;
+            border-radius: 12px;
+            color: white;
+          }
+          #chatSend {
+            padding: 12px 14px;
+            font-size: 14px;
+            background: #3b82f6;
+            border: none;
+            border-radius: 12px;
+            color: white;
+            cursor: pointer;
+            font-weight: 700;
+          }
+          #chatSend:disabled { opacity: 0.7; cursor: default; }
         `}</style>
       </Head>
 
       <div className="container">
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
           <img
-            src="/frostdesk-logo.svg"
+            src="/frostdesk-logo1.svg"
             alt="FrostDesk"
             style={{
               width: 72,
@@ -639,14 +813,43 @@ export default function Home() {
               objectFit: "contain",
               background: "#0e0f12"
             }}
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
           />
         </div>
 
         <h1>FrostDesk</h1>
 
         <p className="subtitle">
-          Scrivi direttamente al tuo maestro e controlla la sua agenda
+          Invia una richiesta al maestro. FrostDesk controlla l’agenda e ti risponde subito.
         </p>
+
+        <div className="hint">
+          Suggerimento: scrivi così per essere confermato più velocemente.
+          <div style={{ marginTop: 8, color: "#e5e7eb" }}>
+            “Domani 10:00, 2 ore, 2 persone, intermedio, Meeting Point Mottolino”
+          </div>
+          <div className="chips">
+            <button type="button" className="chip" onClick={() => applyChip("Oggi")}>Oggi</button>
+            <button type="button" className="chip" onClick={() => applyChip("Domani")}>Domani</button>
+            <button type="button" className="chip" onClick={() => applyChip("10:00")}>10:00</button>
+            <button type="button" className="chip" onClick={() => applyChip("2 ore")}>2 ore</button>
+            <button type="button" className="chip" onClick={() => applyChip("2 persone")}>2 persone</button>
+            <button type="button" className="chip" onClick={() => applyChip("Principiante")}>Principiante</button>
+            <button type="button" className="chip" onClick={() => applyChip("Intermedio")}>Intermedio</button>
+            <button type="button" className="chip" onClick={() => applyChip("Avanzato")}>Avanzato</button>
+            <button type="button" className="chip" onClick={() => applyChip("Meeting point:")}>Meeting point:</button>
+          </div>
+
+          <div className="checklist">
+            <div className="checkItem"><span className={`dot ${checklist.dateTime ? "ok" : ""}`} /> Data e ora</div>
+            <div className="checkItem"><span className={`dot ${checklist.duration ? "ok" : ""}`} /> Durata</div>
+            <div className="checkItem"><span className={`dot ${checklist.participants ? "ok" : ""}`} /> Persone</div>
+            <div className="checkItem"><span className={`dot ${checklist.level ? "ok" : ""}`} /> Livello</div>
+            <div className="checkItem" style={{ gridColumn: "1 / -1" }}><span className={`dot ${checklist.location ? "ok" : ""}`} /> Location / Meeting point</div>
+          </div>
+        </div>
 
         <label>Seleziona il maestro</label>
         <select
@@ -673,8 +876,8 @@ export default function Home() {
         {selectedInstructor && (
           <div className="card">
             <img id="photo" src={selectedInstructor.photo_url || ""} alt="Foto maestro" />
-            <h2 id="name">{selectedInstructor.name || ""}</h2>
-            <p id="bio">{selectedInstructor.bio || ""}</p>
+            <h2 id="name" style={{ margin: "0 0 8px 0" }}>{selectedInstructor.name || ""}</h2>
+            <p id="bio" style={{ margin: 0, color: "#cbd5e1" }}>{selectedInstructor.bio || ""}</p>
           </div>
         )}
 
@@ -694,8 +897,21 @@ export default function Home() {
           />
 
           <label>Messaggio</label>
+          <div className="fieldHelp">
+            <div className="fieldHelpTop">
+              <div className="fieldHelpTitle">Come scrivere il messaggio</div>
+              <button type="button" className="miniBtn" onClick={applyMessageTemplate}>
+                Inserisci esempio
+              </button>
+            </div>
+            <div>Include sempre: data e ora, durata, numero persone, livello, meeting point.</div>
+            <div className="exampleBox">
+              Domani 10:00, 2 ore, 2 persone, intermedio, Meeting Point Mottolino
+            </div>
+          </div>
+
           <textarea
-            placeholder="Scrivi qui la tua richiesta"
+            placeholder="Scrivi qui, seguendo l’esempio sopra"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
           />
@@ -708,15 +924,19 @@ export default function Home() {
         {successMsg && <p id="success">{successMsg}</p>}
         {errorMsg && <p id="errorMsg">{errorMsg}</p>}
 
+        {debug && (
+          <div className="debug">
+            Debug: {JSON.stringify(debug, null, 2)}
+          </div>
+        )}
+
         {altVisible && (
           <div id="altBox" className="card">
             <h3 style={{ margin: "0 0 10px 0" }}>Risposta</h3>
-            <p
-              id="altMsg"
-              style={{ color: "#e5e7eb", fontSize: 14, margin: 0 }}
-            >
+            <p id="altMsg" style={{ color: "#e5e7eb", fontSize: 14, margin: 0 }}>
               {altMsg}
             </p>
+
             <div id="altList" style={{ marginTop: 12 }}>
               {altAlternatives.map((a, i) => (
                 <button
@@ -739,7 +959,8 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <div className="smallMuted">{altMeta}</div>
+
+            {altMeta ? <div className="smallMuted">{altMeta}</div> : null}
           </div>
         )}
       </div>
@@ -761,6 +982,7 @@ export default function Home() {
               </div>
             ))}
           </div>
+
           <div id="chatMeta">{chatMetaText}</div>
 
           <div id="chatFooter">
