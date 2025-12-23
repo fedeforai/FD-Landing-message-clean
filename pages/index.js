@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Head from "next/head";
 
 const INSTRUCTORS_API_URL = "/api/instructors";
-const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/8eo529jglgiqrehsdm0k8rtul68jsmox";
+const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/dgt5e15smwx72qyn9dnfwlqwxu89xdak";
 const MAKE_CONFIRM_WEBHOOK_URL = "PASTE_CONFIRM_WEBHOOK";
 const MAKE_CHAT_WEBHOOK_URL = "PASTE_CHAT_WEBHOOK";
 
