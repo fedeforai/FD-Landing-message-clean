@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 type OkList = { ok: true; data: any[] };
 type OkOne = { ok: true; data: any };
@@ -21,14 +21,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "OPTIONS") return send(res, 200, { ok: true, data: [] });
   if (req.method !== "GET") return send(res, 405, { ok: false, error: "Only GET allowed" });
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+  if (!SUPABASE_URL) {
+    console.error("Missing environment variable: SUPABASE_URL");
     return send(res, 500, {
       ok: false,
-      error: "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (set them in Vercel + local .env.local)"
+      error: "Missing SUPABASE_URL in environment",
     });
   }
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  if (!SERVICE_ROLE_KEY) {
+    console.error("Missing environment variable: SUPABASE_SERVICE_ROLE_KEY");
+    return send(res, 500, {
+      ok: false,
+      error: "Missing SUPABASE_SERVICE_ROLE_KEY in environment",
+    });
+  }
+
+  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false }
   });
 
@@ -61,7 +70,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return send(res, 500, { ok: false, error: error.message || "Supabase error", details: error });
     }
 
-    return send(res, 200, { ok: true, data: data || [] });
+    const cleaned = (data || [])
+      .map((item) => ({
+        ...item,
+        name: (item.name ?? "").trim(),
+        calendar_id: (item.calendar_id ?? "").trim(),
+      }))
+      .filter((item) => {
+        const name = (item.name ?? "").trim();
+        return name.length > 0 && name.toLowerCase() !== "hello";
+      });
+
+    return send(res, 200, { ok: true, data: cleaned });
   } catch (e: any) {
     console.error("Unhandled /api/instructors error:", e);
     return send(res, 500, { ok: false, error: String(e?.message || e) });

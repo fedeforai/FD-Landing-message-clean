@@ -66,3 +66,14 @@ Copy, messaging and visuals may evolve as FrostDesk scales.
 
 For questions or collaboration:  
 **FrostDesk Team**
+
+---
+
+## 🛠️ Environment variables
+
+The landing page talks to Supabase via `/api/instructors`; this route runs server-side and requires the following env vars:
+
+- `SUPABASE_URL` – the full URL of your Supabase project (service role endpoint).
+- `SUPABASE_SERVICE_ROLE_KEY` – the service role key, never exposed to the browser.
+
+If either value is missing, `/api/instructors` responds with HTTP 500 and a clear log message telling you which variable is absent.

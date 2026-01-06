@@ -5,10 +5,68 @@ import Head from "next/head";
 const INSTRUCTORS_API_URL = "/api/instructors";
 const MAKE_WEBHOOK_URL = "https://hook.eu1.make.com/dgt5e15smwx72qyn9dnfwlqwxu89xdak";
 const MAKE_CONFIRM_WEBHOOK_URL = "PASTE_CONFIRM_WEBHOOK";
-const MAKE_CHAT_WEBHOOK_URL = "PASTE_CHAT_WEBHOOK";
+const WHATSAPP_BASE_LINK = process.env.NEXT_PUBLIC_WA_LINK || "WA_LINK";
+const WHATSAPP_PREFILL_TEXT = encodeURIComponent("Ciao, voglio prenotare una lezione");
 
 const CONVERSATION_KEY = "fd_conversation_id";
 const CHAT_STORAGE_KEY = "fd_chat_session_id";
+const THREAD_HISTORY_PREFIX = "fd_chat_history_";
+const SELECTED_INSTRUCTOR_STORAGE_KEY = "frostdesk:selectedInstructor";
+const THREAD_STORAGE_KEY = "frostdesk:threadId";
+const MAESTRO_APP_URL = "https://app.frostdesk.io";
+const BADGE_KEYWORDS = [
+  { label: "Olympian", regex: /olympian/i },
+  { label: "Ambassador", regex: /ambassador/i },
+  { label: "Director", regex: /director/i },
+];
+
+/**
+ * @typedef SelectedInstructor
+ * @property {string} id
+ * @property {string} name
+ * @property {string | null | undefined} [slug]
+ * @property {string | null | undefined} [photo_url]
+ * @property {string | null | undefined} [whatsapp_number]
+ * @property {boolean} frostdesk_enabled
+ */
+
+function safeLocalStorageGet(key) {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(key);
+}
+
+function safeLocalStorageSet(key, value) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, value);
+}
+
+function safeLocalStorageRemove(key) {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(key);
+}
+
+export function saveSelectedInstructor(i) {
+  safeLocalStorageSet(SELECTED_INSTRUCTOR_STORAGE_KEY, JSON.stringify(i));
+}
+
+export function loadSelectedInstructor() {
+  const raw = safeLocalStorageGet(SELECTED_INSTRUCTOR_STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error("Unable to parse selected instructor:", err);
+    return null;
+  }
+}
+
+export function clearSelectedInstructor() {
+  safeLocalStorageRemove(SELECTED_INSTRUCTOR_STORAGE_KEY);
+}
+
+export function clearThreadId() {
+  safeLocalStorageRemove(THREAD_STORAGE_KEY);
+}
 
 function getConversationId() {
   if (typeof window === "undefined") return null;
@@ -31,8 +89,48 @@ function getOrCreateChatSessionId() {
   return id;
 }
 
+function getStoredThreadId() {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(THREAD_STORAGE_KEY);
+}
+
+function getOrCreateThreadId() {
+  const existing = getStoredThreadId();
+  if (existing) return existing;
+  if (typeof window === "undefined") return null;
+  const rand = Math.random().toString(16).slice(2);
+  const tid = `thread-web-${Date.now()}-${rand}`;
+  window.localStorage.setItem(THREAD_STORAGE_KEY, tid);
+  return tid;
+}
+
+function newMessageId(prefix = "msg-web") {
+  const rand = Math.random().toString(16).slice(2);
+  return `${prefix}-${Date.now()}-${rand}`;
+}
+
 function safeText(v) {
   return (v ?? "").toString();
+}
+function getInstructorInitials(name) {
+  const cleaned = safeText(name).trim();
+  if (!cleaned) return "FD";
+  const parts = cleaned.split(/\s+/);
+  if (parts.length === 1) return parts[0][0]?.toUpperCase() ?? "F";
+  const first = parts[0][0]?.toUpperCase() ?? "F";
+  const last = parts[parts.length - 1][0]?.toUpperCase() ?? "D";
+  return `${first}${last}`;
+}
+function buildWhatsAppLink(instructor) {
+  const candidateNumber = instructor?.whatsapp_number?.toString().trim();
+  if (candidateNumber) {
+    return `https://wa.me/${candidateNumber}?text=${WHATSAPP_PREFILL_TEXT}`;
+  }
+  return `${WHATSAPP_BASE_LINK}?text=${WHATSAPP_PREFILL_TEXT}`;
+}
+function getInstructorBadges(bio) {
+  if (!bio) return [];
+  return BADGE_KEYWORDS.filter(({ regex }) => regex.test(bio)).map(({ label }) => label);
 }
 function isSchemaString(v) {
   if (!v) return false;
@@ -92,6 +190,8 @@ export default function Home() {
   const [chatMissingFields, setChatMissingFields] = useState([]);
   const [chatDraftFields, setChatDraftFields] = useState({});
   const [chatSessionId, setChatSessionIdState] = useState(null);
+  const [threadId, setThreadId] = useState("");
+  const [copyStatus, setCopyStatus] = useState("");
 
   const [lastBasePayload, setLastBasePayload] = useState(null);
 
@@ -105,6 +205,97 @@ export default function Home() {
     setChatSessionIdState(getOrCreateChatSessionId());
     loadInstructors();
   }, []);
+
+  function resetThreadContext() {
+    if (typeof window !== "undefined") {
+      const prevThreadId = window.localStorage.getItem(THREAD_STORAGE_KEY);
+      if (prevThreadId) {
+        window.localStorage.removeItem(THREAD_HISTORY_PREFIX + prevThreadId);
+      }
+    }
+    clearThreadId();
+    setThreadId("");
+    setChatMessages([]);
+  }
+
+  useEffect(() => {
+    const saved = loadSelectedInstructor();
+    if (saved?.id) {
+      setSelectedInstructorId(saved.id);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedId = getStoredThreadId();
+    if (!storedId) return;
+    setThreadId(storedId);
+    const stored = window.localStorage.getItem(THREAD_HISTORY_PREFIX + storedId);
+    if (stored) {
+      try {
+        setChatMessages(JSON.parse(stored));
+        setTimeout(scrollChatToBottom, 50);
+      } catch (err) {
+        console.error("Failed to parse saved chat history:", err);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!threadId || typeof window === "undefined") return;
+    window.localStorage.setItem(THREAD_HISTORY_PREFIX + threadId, JSON.stringify(chatMessages));
+  }, [chatMessages, threadId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedInstructorId) {
+      setSelectedInstructor(null);
+      return;
+    }
+
+    async function fetchInstructor() {
+      try {
+        const url = INSTRUCTORS_API_URL + "?id=" + encodeURIComponent(selectedInstructorId);
+        const res = await fetch(url, { method: "GET" });
+        const json = await res.json().catch(() => ({}));
+
+        if (!res.ok || !json || json.ok !== true || !json.data) {
+          const msg = json?.error ? String(json.error) : "HTTP " + res.status;
+          setErrorMsg("Errore caricamento maestro selezionato.\n" + msg);
+          return;
+        }
+
+        if (!cancelled) {
+          setSelectedInstructor(json.data);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Errore loadInstructor:", err);
+        setErrorMsg("Errore rete nel caricamento maestro.");
+      }
+    }
+
+    fetchInstructor();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedInstructorId]);
+
+  useEffect(() => {
+    if (selectedInstructor) {
+      saveSelectedInstructor({
+        id: selectedInstructor.id,
+        name: selectedInstructor.name,
+        slug: selectedInstructor.slug ?? null,
+        photo_url: selectedInstructor.photo_url ?? null,
+        whatsapp_number: selectedInstructor.whatsapp_number ?? null,
+        frostdesk_enabled: Boolean(selectedInstructor.frostdesk_enabled),
+      });
+    } else {
+      clearSelectedInstructor();
+    }
+  }, [selectedInstructor]);
 
   function resetFeedback() {
     setSuccessMsg("");
@@ -132,8 +323,15 @@ export default function Home() {
         return;
       }
 
-      const data = Array.isArray(json.data) ? json.data : [];
-      setInstructors(data);
+      const rawData = Array.isArray(json.data) ? json.data : [];
+      const sorted = [...rawData].sort((a, b) => {
+        const nameA = safeText(a?.name).toLowerCase();
+        const nameB = safeText(b?.name).toLowerCase();
+        if (nameA < nameB) return -1;
+        if (nameA > nameB) return 1;
+        return 0;
+      });
+      setInstructors(sorted);
       setInstructorsLoading(false);
     } catch (err) {
       console.error("Errore loadInstructors:", err);
@@ -142,31 +340,56 @@ export default function Home() {
     }
   }
 
-  async function handleSelectChange(e) {
+  function handleSelectChange(e) {
     const id = e.target.value;
-    setSelectedInstructorId(id);
     resetFeedback();
-
+    resetThreadContext();
+    setSelectedInstructorId(id);
     if (!id) {
       setSelectedInstructor(null);
       return;
     }
 
+  }
+  async function onWhatsappClick(event) {
+    event.preventDefault();
+    const selected = loadSelectedInstructor();
+    if (!selected) return;
+
+    const externalThreadId = getOrCreateThreadId();
+    if (!externalThreadId) {
+      console.warn("CTA clicked but thread id missing");
+      return;
+    }
+
+    const payload = {
+      channel: "webchat",
+      external_thread_id: externalThreadId,
+      external_message_id: newMessageId("cta-web"),
+      from: {
+        handle: "webchat",
+        display_name: "Website Visitor",
+        phone_or_email: "unknown",
+      },
+      timestamp: new Date().toISOString(),
+      event_type: "cta_whatsapp_click",
+      text: "cta_whatsapp_click",
+      instructor_id: selected.id,
+    };
+
     try {
-      const url = INSTRUCTORS_API_URL + "?id=" + encodeURIComponent(id);
-      const res = await fetch(url, { method: "GET" });
-      const json = await res.json().catch(() => ({}));
-
-      if (!res.ok || !json || json.ok !== true || !json.data) {
-        const msg = json?.error ? String(json.error) : "HTTP " + res.status;
-        setErrorMsg("Errore caricamento maestro selezionato.\n" + msg);
-        return;
-      }
-
-      setSelectedInstructor(json.data);
+      await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
     } catch (err) {
-      console.error("Errore loadInstructor:", err);
-      setErrorMsg("Errore rete nel caricamento maestro.");
+      console.error("Errore tracking CTA WhatsApp:", err);
+    }
+
+    const url = buildWhatsAppLink(selected);
+    if (typeof window !== "undefined") {
+      window.open(url, "_blank", "noopener,noreferrer");
     }
   }
 
@@ -362,8 +585,15 @@ export default function Home() {
   // === mini chat ===
   function openChat(initialAiMessage, missingFields) {
     setChatMissingFields(Array.isArray(missingFields) ? missingFields : []);
+    const aiLabel = selectedInstructor
+      ? `${selectedInstructor.name || "FrostDesk"} (FrostDesk)`
+      : "FrostDesk";
     setChatMessages([
-      { role: "ai", text: initialAiMessage || "Dimmi pure i dettagli mancanti." },
+      {
+        role: "ai",
+        text: initialAiMessage || "Dimmi pure i dettagli mancanti.",
+        label: aiLabel,
+      },
     ]);
     setChatOpen(true);
     setTimeout(scrollChatToBottom, 50);
@@ -373,9 +603,43 @@ export default function Home() {
     setChatOpen(false);
   }
 
-  function addChatMsg(role, text) {
-    setChatMessages((prev) => [...prev, { role, text }]);
+  function addChatMsg(role, text, label) {
+    setChatMessages((prev) => [...prev, { role, text, label }]);
     setTimeout(scrollChatToBottom, 50);
+  }
+
+  async function copyTranscript() {
+    if (typeof window === "undefined" || !threadId) return;
+    const transcript = {
+      channel: "webchat",
+      external_thread_id: threadId,
+      instructor: {
+        id: selectedInstructor?.id ?? null,
+        name: selectedInstructor?.name ?? null,
+      },
+      messages: chatMessages,
+    };
+    const payload = JSON.stringify(transcript, null, 2);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(payload);
+      } else if (typeof document !== "undefined") {
+        const textarea = document.createElement("textarea");
+        textarea.value = payload;
+        textarea.style.position = "fixed";
+        textarea.style.top = "-9999px";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopyStatus("Copied");
+    } catch (err) {
+      console.error("Unable to copy transcript:", err);
+      setCopyStatus("Copy failed");
+    } finally {
+      setTimeout(() => setCopyStatus(""), 2000);
+    }
   }
 
   function scrollChatToBottom() {
@@ -387,71 +651,69 @@ export default function Home() {
     const userText = safeText(chatText).trim();
     if (!userText) return;
 
-    if (!MAKE_CHAT_WEBHOOK_URL || MAKE_CHAT_WEBHOOK_URL.includes("PASTE_")) {
-      addChatMsg("ai", "Manca MAKE_CHAT_WEBHOOK_URL. Incolla l'URL del webhook mini chat.");
+    const currentThreadId = getOrCreateThreadId();
+    if (!currentThreadId) {
+      console.warn("Unable to send message: missing thread id");
       return;
     }
+    setThreadId(currentThreadId);
+    const externalMessageId = newMessageId("msg-web");
+    const aiLabel = selectedInstructor
+      ? `${selectedInstructor.name || "FrostDesk"} (FrostDesk)`
+      : "FrostDesk";
 
     addChatMsg("user", userText);
     setChatText("");
     setChatSending(true);
 
-    try {
-      const payload = {
-        session_id: chatSessionId,
-        conversation_id: getConversationId() || null,
-        instructor_id: lastBasePayload?.instructor_id || null,
-        instructor_name: lastBasePayload?.instructor_name || null,
-        calendar_id: lastBasePayload?.calendar_id || null,
-        customer_name: lastBasePayload?.name || null,
-        customer_phone: lastBasePayload?.phone || null,
-        original_message: lastBasePayload?.message || null,
-        missing_fields: chatMissingFields,
-        user_message: userText,
-        client_tz: lastBasePayload?.client_tz || getClientTZ(),
-        source: "landing_chat",
-      };
+    const selected = loadSelectedInstructor();
+    const payload = {
+      channel: "webchat",
+      external_thread_id: currentThreadId,
+      external_message_id: externalMessageId,
+      from: {
+        handle: "webchat",
+        display_name: "Website Visitor",
+        phone_or_email: "unknown",
+      },
+      timestamp: new Date().toISOString(),
+      text: userText,
+      ...(selected?.id ? { instructor_id: selected.id } : {}),
+    };
 
-      const res = await fetch(MAKE_CHAT_WEBHOOK_URL, {
+    console.log("Sending chat payload", {
+      threadId: currentThreadId,
+      instructorId: selected?.id ?? null,
+    });
+
+    try {
+      const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const contentType = res.headers.get("content-type") || "";
-      let data;
-      if (contentType.includes("application/json")) data = await res.json();
-      else data = { ok: res.ok, message: await res.text() };
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (parseErr) {
+        console.error("Unable to parse orchestration response:", parseErr);
+      }
 
       if (!res.ok) {
-        addChatMsg("ai", normalizeMessage(data?.message) || "Errore nella chat.");
-        setChatSending(false);
+        addChatMsg("ai", "Errore nella chat. Riprova tra pochi secondi.");
         return;
       }
 
-      addChatMsg("ai", normalizeMessage(data?.message));
-
-      if (Array.isArray(data?.missing_fields)) {
-        setChatMissingFields(data.missing_fields);
-      }
-
-      if (data?.is_complete === true) {
-        const uf = data?.updated_fields && typeof data.updated_fields === "object"
-          ? data.updated_fields
-          : {};
-        setChatDraftFields((prev) => ({ ...prev, ...uf }));
-
-        setTimeout(async () => {
-          closeChat();
-          const merged = { ...lastBasePayload, ...uf, message: lastBasePayload?.message || "" };
-          await callMakeEndpoint(merged);
-        }, 300);
-      }
-
-      setChatSending(false);
+      const staticFallback = "Ok, ricevuto.";
+      const replyText = normalizeMessage(
+        (data?.replyText ?? data?.message) || staticFallback
+      );
+      addChatMsg("ai", replyText, aiLabel);
     } catch (err) {
       console.error("Errore mini chat:", err);
-      addChatMsg("ai", "Errore rete. Riprova tra pochi secondi.");
+      addChatMsg("ai", "Errore rete. Riprova tra pochi secondi.", aiLabel);
+    } finally {
       setChatSending(false);
     }
   }
@@ -463,6 +725,11 @@ export default function Home() {
       : "Rispondi qui con i dettagli.";
 
   const checklist = guessChecklist(message);
+  const selectedInstructorBadges = selectedInstructor
+    ? getInstructorBadges(selectedInstructor.bio)
+    : [];
+  const storedInstructor = loadSelectedInstructor();
+  const showWhatsAppCTA = Boolean(storedInstructor && storedInstructor.frostdesk_enabled);
 
   return (
     <>
@@ -687,6 +954,40 @@ export default function Home() {
             margin-bottom: 14px;
             background: #0e0f12;
           }
+          .placeholder-avatar {
+            width: 140px;
+            height: 140px;
+            border-radius: 16px;
+            margin-bottom: 14px;
+            background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.5), transparent 55%),
+              radial-gradient(circle at 70% 60%, rgba(16, 185, 129, 0.45), transparent 60%),
+              #111318;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 42px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #e5e7eb;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            text-transform: uppercase;
+          }
+          .badgeRow {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 6px;
+          }
+          .instructorBadge {
+            font-size: 10px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.04);
+            color: #a5b4fc;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+          }
           .smallMuted {
             margin-top: 10px;
             font-size: 12px;
@@ -760,15 +1061,63 @@ export default function Home() {
             border: 1px solid #2f333a;
             white-space: pre-wrap;
             word-break: break-word;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
           }
           .chatMsg.ai { background: #0e0f12; color: #e5e7eb; }
           .chatMsg.user { background: #1a1d22; color: #ffffff; border-color: #3d414a; }
+          .chatMsgLabel {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: #9ca3af;
+          }
+          .chatInstructorInfo {
+            font-size: 12px;
+            color: #c7d2ff;
+            padding: 0 16px 8px;
+          }
           #chatMeta {
             padding: 10px 16px;
             border-top: 1px solid #2f333a;
             background: #0e0f12;
             font-size: 12px;
             color: #9ca3af;
+          }
+          .chatActions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            border-bottom: 1px solid #2f333a;
+            background: #0e0f12;
+          }
+          .chatActions .chatToast {
+            font-size: 12px;
+            color: #34d399;
+            margin-left: auto;
+          }
+          .chatLink {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+          }
+          .whatsappCTA {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+          }
+          .whatsappMicro {
+            font-size: 11px;
+            color: #94a3b8;
+          }
+          .whatsappDisabled {
+            font-size: 12px;
+            color: #f87171;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
           }
           #chatFooter {
             display: flex;
@@ -875,9 +1224,32 @@ export default function Home() {
 
         {selectedInstructor && (
           <div className="card">
-            <img id="photo" src={selectedInstructor.photo_url || ""} alt="Foto maestro" />
-            <h2 id="name" style={{ margin: "0 0 8px 0" }}>{selectedInstructor.name || ""}</h2>
-            <p id="bio" style={{ margin: 0, color: "#cbd5e1" }}>{selectedInstructor.bio || ""}</p>
+            {selectedInstructor.photo_url?.trim() ? (
+              <img
+                id="photo"
+                src={selectedInstructor.photo_url}
+                alt="Foto maestro"
+              />
+            ) : (
+              <div className="placeholder-avatar">
+                {getInstructorInitials(selectedInstructor.name)}
+              </div>
+            )}
+            {selectedInstructorBadges.length > 0 && (
+              <div className="badgeRow">
+                {selectedInstructorBadges.map((badge) => (
+                  <span key={badge} className="instructorBadge">
+                    {badge}
+                  </span>
+                ))}
+              </div>
+            )}
+            <h2 id="name" style={{ margin: "0 0 8px 0" }}>
+              {selectedInstructor.name || ""}
+            </h2>
+            <p id="bio" style={{ margin: 0, color: "#cbd5e1" }}>
+              {selectedInstructor.bio || ""}
+            </p>
           </div>
         )}
 
@@ -974,16 +1346,58 @@ export default function Home() {
               Chiudi
             </button>
           </div>
+          <div className="chatInstructorInfo">
+            {selectedInstructor
+              ? `Stai chattando con: ${selectedInstructor.name || "FrostDesk"}`
+              : "FrostDesk"}
+          </div>
 
           <div id="chatBody" ref={chatBodyRef}>
             {chatMessages.map((m, i) => (
               <div key={i} className={`chatMsg ${m.role === "user" ? "user" : "ai"}`}>
+                {m.label && (
+                  <span className="chatMsgLabel">{m.label}</span>
+                )}
                 {m.text}
               </div>
             ))}
           </div>
 
           <div id="chatMeta">{chatMetaText}</div>
+          <div className="chatActions">
+            {showWhatsAppCTA ? (
+              <div className="whatsappCTA">
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={onWhatsappClick}
+                >
+                  Continua su WhatsApp
+                </button>
+                <div className="whatsappMicro">
+                  Ti risponde subito il sistema di booking.
+                </div>
+              </div>
+            ) : storedInstructor && storedInstructor.frostdesk_enabled === false ? (
+              <div className="whatsappDisabled">
+                Questo maestro risponde in app
+              </div>
+            ) : null}
+            <button type="button" className="button secondary" onClick={copyTranscript}>
+              Copy transcript
+            </button>
+            {MAESTRO_APP_URL && threadId && (
+              <a
+                className="button secondary chatLink"
+                target="_blank"
+                rel="noreferrer"
+                href={`${MAESTRO_APP_URL}/maestro/inbox?threadId=${encodeURIComponent(threadId)}`}
+              >
+                Open in Maestro App
+              </a>
+            )}
+            {copyStatus && <span className="chatToast">{copyStatus}</span>}
+          </div>
 
           <div id="chatFooter">
             <input
