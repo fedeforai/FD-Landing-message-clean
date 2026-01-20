@@ -370,6 +370,16 @@ export default async function handler(req, res) {
       }
 
       // Retries exhausted, return error
+      console.error("Upstream error after retries:", {
+        trace_id: traceId,
+        external_message_id: external_message_id,
+        status: upstreamRes.status,
+        error: lastError,
+        parsed: parsed,
+        attempts: attempt + 1,
+        edgeFunctionUrl: `${supabaseUrl.replace(/\/$/, "")}/functions/v1/ingest-inbound`,
+      });
+      
       if (parsed) {
         return res.status(upstreamRes.status).json({
           ok: false,
