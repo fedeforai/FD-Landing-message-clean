@@ -1,0 +1,54 @@
+REPO: Orchestrator (Supabase Edge Functions)
+FILE: supabase/functions/ingest-inbound/index.ts
+
+PROBLEMA CRITICO:
+La Landing Page si aspetta che `ingest-inbound` restituisca `replyText` nella risposta immediata (200 OK), ma attualmente l'Orchestrator:
+1. Riceve il messaggio
+2. Crea un task per Make
+3. Restituisce solo { ok: true, conversation_id, trace_id, message_id }
+4. NON restituisce replyText
+
+La Landing mostra "Your instructor will reply soon" invece della risposta AI.
+
+SOLUZIONE RICHIESTA:
+Modificare `ingest-inbound` per generare e restituire `replyText` IMMEDIATAMENTE nella risposta, prima di creare il task per Make.
+
+FLUSSO RICHIESTO:
+1. Ricevi messaggio → Valida payload
+2. Crea/aggiorna conversation_thread
+3. Inserisci messaggio utente in conversation_messages
+4. **GENERA RISPOSTA AI IMMEDIATAMENTE**:
+   - Se handoff_to_human = true → replyText: null
+   - Altrimenti:
+     a. Recupera instructor data (da DB o chiama get-instructor-context)
+     b. Recupera policy chunks (se disponibili)
+     c. Chiama OpenAI con prompt RAG (instructor + policies + conversation context)
+     d. Estrai replyText dalla risposta OpenAI
+5. Inserisci messaggio AI in conversation_messages (role: "assistant")
+6. Crea task per Make (opzionale, per azioni asincrone)
+7. **RESTITUISCI RISPOSTA CON replyText**:
+   {
+     "ok": true,
+     "conversation_id": "...",
+     "trace_id": "...",
+     "message_id": "...",
+     "replyText": "Risposta AI generata...",  // ✅ OBBLIGATORIO
+     "handoff_to_human": false
+   }
+
+CONSTRAINTS:
+- Timeout massimo: 25 secondi (Vercel timeout è 30s)
+- Se OpenAI fallisce: restituire replyText: null, ma ok: true
+- Mantenere compatibilità con SYSTEM_CONTRACT.md
+- Usare trace_id per logging
+
+IMPLEMENTAZIONE:
+- Usa OpenAI gpt-4o-mini o gpt-4-turbo
+- Costruisci prompt con: instructor data + policy chunks + conversation context
+- Inserisci risposta AI in conversation_messages prima di restituire
+- Restituisci replyText nella risposta JSON
+
+TEST:
+- Invia messaggio dalla Landing
+- Verifica che replyText sia presente nella risposta
+- Verifica che il messaggio AI appaia nella chat immediatamente
