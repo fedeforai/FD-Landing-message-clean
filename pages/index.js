@@ -386,9 +386,10 @@ export default function Home() {
           },
         });
 
+        // Update user message state to show it was delivered but failed
+        // Don't mark user message as error - only the error response message should be marked as error
         updateMessageState(idempotencyKey, { 
-          state: "error",
-          error: result.error,
+          state: "delivered", // Mark as delivered even if there was an error
           trace_id: result.trace_id || traceId,
         });
         
@@ -418,9 +419,9 @@ export default function Home() {
       });
 
       cleanupPendingMessage(idempotencyKey);
+      // Update user message state - don't mark as error, just mark as delivered
       updateMessageState(idempotencyKey, { 
-        state: "error",
-        error: err.message,
+        state: "delivered", // Mark as delivered even if there was a network error
       });
       
       setChatMessages((prev) => [
@@ -1134,9 +1135,9 @@ export default function Home() {
 
       <div className="container">
         <div className="header">
-          <h1>FrostDesk</h1>
+        <h1>FrostDesk</h1>
           <p>Book a lesson in under 2 minutes</p>
-        </div>
+          </div>
 
         {/* Client Info Form */}
         {showClientForm && (
@@ -1153,7 +1154,7 @@ export default function Home() {
                 required
                 maxLength={100}
               />
-            </div>
+          </div>
             <div className="form-group">
               <label htmlFor="client-phone">Phone Number *</label>
               <input
@@ -1183,7 +1184,7 @@ export default function Home() {
                 <div className="empty-state">No instructors available</div>
               ) : (
                 <>
-                  <select
+        <select
                     className="instructor-select"
                     value={selectedInstructorId || ""}
                     onChange={(e) => handleInstructorSelect(e.target.value)}
@@ -1192,11 +1193,11 @@ export default function Home() {
                     {instructors.map((instructor) => (
                       <option key={instructor.id} value={instructor.id}>
                         {instructor.name}
-                      </option>
-                    ))}
-                  </select>
+                </option>
+              ))}
+        </select>
 
-                  {selectedInstructor && (
+        {selectedInstructor && (
                     <div className="instructor-detail">
                       <div className="instructor-detail-header">
                         <div className="instructor-detail-avatar">
@@ -1214,21 +1215,21 @@ export default function Home() {
                                 <span key={badge} className="badge">
                                   {badge}
                                 </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                ))}
+              </div>
+            )}
+          </div>
+            </div>
                       {selectedInstructor.bio && (
                         <div className="instructor-detail-bio">
                           {selectedInstructor.bio}
-                        </div>
+            </div>
                       )}
-                    </div>
+          </div>
                   )}
                 </>
-              )}
-            </div>
+        )}
+      </div>
 
           {/* Chat Widget Panel */}
           <div className="panel">
@@ -1245,20 +1246,23 @@ export default function Home() {
               <div className="chat-messages" ref={chatBodyRef}>
                 {chatMessages.length === 0 ? (
                   <div className="empty-state">
-                    {selectedInstructor
+            {selectedInstructor
                       ? "Start the conversation..."
                       : "Select an instructor to begin"}
-                  </div>
+          </div>
                 ) : (
                   chatMessages.map((msg, idx) => {
                     // Determine CSS classes based on state and type
+                    // Priority: isError > role > state
                     const classes = [
                       'chat-message',
-                      msg.isError ? 'error' : msg.role,
-                      msg.state === 'waiting' ? 'waiting' : '',
-                      msg.isFallback ? 'fallback' : '',
-                      msg.isWaiting ? 'waiting' : '',
-                      msg.state || '',
+                      msg.isError ? 'error' : msg.role, // Primary class: error or role (user/ai)
+                      // Only add state classes if not error and state is meaningful
+                      !msg.isError && msg.state === 'waiting' ? 'waiting' : '',
+                      !msg.isError && msg.isFallback ? 'fallback' : '',
+                      !msg.isError && msg.isWaiting ? 'waiting' : '',
+                      // Don't add 'error' as a state class if it's already the primary class
+                      !msg.isError && msg.state && msg.state !== 'error' ? msg.state : '',
                     ].filter(Boolean).join(' ');
                     
                     return (
@@ -1267,7 +1271,7 @@ export default function Home() {
                         {(msg.state === 'sending' || msg.state === 'delivered' || msg.state === 'waiting') && (
                           <div className="chat-message-state" />
             )}
-          </div>
+              </div>
                     );
                   })
             )}
@@ -1289,20 +1293,20 @@ export default function Home() {
                       disabled={!selectedInstructor || chatSending}
                     >
                       {suggestion}
-                    </button>
+                </button>
                   ))}
-                </div>
               </div>
+          </div>
 
               <div className="chat-input-area">
                 {/* Honeypot field - hidden from users, bots will fill it */}
-                <input
+            <input
                   ref={honeypotFieldRef}
                   type="text"
                   name="website"
                   style={{ display: 'none' }}
                   tabIndex={-1}
-                  autoComplete="off"
+              autoComplete="off"
                   aria-hidden="true"
                 />
                 <input
@@ -1315,9 +1319,9 @@ export default function Home() {
                   }
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => {
+              onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
+                  e.preventDefault();
                       handleChatSend();
                     }
                   }}
@@ -1330,8 +1334,8 @@ export default function Home() {
                   disabled={!selectedInstructor || chatSending || !chatInput.trim()}
                 >
                   {chatSending ? "..." : "Send"}
-                </button>
-              </div>
+            </button>
+          </div>
 
               {showWhatsAppCTA && (
                 <button className="whatsapp-cta" onClick={handleWhatsAppClick}>
