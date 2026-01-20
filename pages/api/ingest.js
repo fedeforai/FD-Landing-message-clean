@@ -320,6 +320,16 @@ export default async function handler(req, res) {
           });
         }
 
+        // Log response for debugging
+        console.log('[INGEST] Orchestrator response:', {
+          trace_id: traceId,
+          has_replyText: !!parsed.replyText,
+          replyText_length: parsed.replyText?.length || 0,
+          conversation_id: parsed.conversation_id,
+          handoff_to_human: parsed.handoff_to_human,
+          response_keys: Object.keys(parsed),
+        });
+
         // Return response: { ok: true, conversation_id, trace_id, replyText }
         return res.status(200).json({
           ok: true,

@@ -310,6 +310,16 @@ export default function Home() {
 
       // Log outcome to Sentry
       if (result.ok) {
+        // Debug logging
+        console.log('[CLIENT] Message response:', {
+          ok: result.ok,
+          has_replyText: !!result.replyText,
+          replyText: result.replyText?.substring(0, 100) || null,
+          handoff_to_human: result.handoff_to_human,
+          conversation_id: result.conversation_id,
+          trace_id: result.trace_id,
+        });
+
         Sentry.addBreadcrumb({
           category: 'message',
           message: 'Message sent successfully',
@@ -319,6 +329,7 @@ export default function Home() {
             conversation_id: result.conversation_id,
             message_id: result.message_id,
             has_reply: !!result.replyText,
+            replyText_length: result.replyText?.length || 0,
           },
         });
         
@@ -344,13 +355,14 @@ export default function Home() {
             },
           ]);
           setMessageCount((prev) => prev + 1);
-        } else if (result.replyText) {
+        } else if (result.replyText && result.replyText.trim().length > 0) {
           // We have an AI reply
+          console.log('[CLIENT] Adding AI reply to chat:', result.replyText.substring(0, 100));
           setChatMessages((prev) => [
             ...prev,
             {
               role: "ai",
-              text: result.replyText,
+              text: result.replyText.trim(),
               state: "replied",
               trace_id: result.trace_id,
               conversation_id: result.conversation_id,
@@ -359,6 +371,7 @@ export default function Home() {
           setMessageCount((prev) => prev + 1);
         } else {
           // No immediate reply - show waiting state
+          console.log('[CLIENT] No replyText received, showing waiting message');
           updateMessageState(idempotencyKey, { state: "waiting" });
           setChatMessages((prev) => [
             ...prev,
