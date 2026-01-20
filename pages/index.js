@@ -19,6 +19,10 @@ import {
   setExternalThreadId,
   setSelectedInstructorId,
   getOrCreateTraceId,
+  getClientName,
+  setClientName,
+  getClientPhone,
+  setClientPhone,
 } from "../lib/storage";
 import { sendChatMessage, trackEvent, fetchInstructors, fetchInstructor } from "../lib/api";
 import { getInstructorInitials, getInstructorBadges, buildWhatsAppLink, generateIdempotencyKey, generateUUID } from "../lib/utils";
@@ -26,6 +30,9 @@ import * as Sentry from "@sentry/nextjs";
 
 export default function Home() {
   // State
+  const [clientName, setClientNameState] = useState("");
+  const [clientPhone, setClientPhoneState] = useState("");
+  const [showClientForm, setShowClientForm] = useState(true);
   const [instructors, setInstructors] = useState([]);
   const [instructorsLoading, setInstructorsLoading] = useState(true);
   const [selectedInstructorId, setSelectedInstructorIdState] = useState("");
@@ -34,6 +41,13 @@ export default function Home() {
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
   const [messageCount, setMessageCount] = useState(0); // Track messages for CTA visibility
+  const [messageSuggestions] = useState([
+    "Ciao! Vorrei prenotare una lezione",
+    "Quali sono i tuoi orari disponibili?",
+    "Sono principiante, puoi aiutarmi?",
+    "Quanto costa una lezione?",
+    "Hai disponibilità questo weekend?",
+  ]);
 
   const chatBodyRef = useRef(null);
   const externalThreadIdRef = useRef(null);
@@ -60,6 +74,15 @@ export default function Home() {
       setInstructors(list);
       setInstructorsLoading(false);
 
+      // Restore client info from localStorage
+      const savedName = getClientName();
+      const savedPhone = getClientPhone();
+      if (savedName && savedPhone) {
+        setClientNameState(savedName);
+        setClientPhoneState(savedPhone);
+        setShowClientForm(false);
+      }
+
       // Restore selected instructor from localStorage
       const savedInstructorId = getSelectedInstructorId();
       if (savedInstructorId) {
@@ -81,6 +104,19 @@ export default function Home() {
 
     init();
   }, []);
+
+  // Handle client form submission
+  function handleClientFormSubmit(e) {
+    e.preventDefault();
+    if (!clientName.trim() || !clientPhone.trim()) {
+      alert("Please fill in both name and phone number");
+      return;
+    }
+    
+    setClientName(clientName.trim());
+    setClientPhone(clientPhone.trim());
+    setShowClientForm(false);
+  }
 
   // Scroll chat to bottom when messages change
   useEffect(() => {
@@ -265,6 +301,8 @@ export default function Home() {
         external_message_id: externalMessageId,
         submit_time: formRenderTimeRef.current,
         honeypot: honeypot,
+        client_name: clientName,
+        client_phone: clientPhone,
       });
 
       // Clear timeout since we got a response
@@ -929,62 +967,268 @@ export default function Home() {
             background: rgba(255, 255, 255, 0.1);
             text-decoration: none;
           }
+          .client-form {
+            background: white;
+            border-radius: 20px;
+            padding: 32px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.05);
+            margin-bottom: 32px;
+            animation: fadeInUp 0.8s ease-out;
+          }
+          .client-form h2 {
+            margin: 0 0 24px 0;
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a1a;
+            letter-spacing: -0.3px;
+          }
+          .form-group {
+            margin-bottom: 20px;
+          }
+          .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #374151;
+            font-size: 14px;
+          }
+          .form-group input {
+            width: 100%;
+            padding: 14px 18px;
+            border: 2px solid #d1d5db;
+            border-radius: 12px;
+            font-size: 15px;
+            transition: all 0.2s ease;
+            font-family: inherit;
+          }
+          .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+          }
+          .form-submit {
+            width: 100%;
+            padding: 14px 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+            font-size: 16px;
+          }
+          .form-submit:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+          }
+          .form-submit:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+          .instructor-select {
+            width: 100%;
+            padding: 14px 18px;
+            border: 2px solid #d1d5db;
+            border-radius: 12px;
+            font-size: 15px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23667eea' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 18px center;
+            padding-right: 45px;
+          }
+          .instructor-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+          }
+          .instructor-detail {
+            margin-top: 24px;
+            padding: 24px;
+            background: linear-gradient(135deg, #f5f7ff 0%, #eef2ff 100%);
+            border-radius: 16px;
+            border: 2px solid #e0e7ff;
+          }
+          .instructor-detail-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 16px;
+          }
+          .instructor-detail-avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            object-fit: cover;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            color: white;
+            font-size: 32px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+            flex-shrink: 0;
+          }
+          .instructor-detail-avatar img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+          }
+          .instructor-detail-info h3 {
+            margin: 0 0 8px 0;
+            font-size: 20px;
+            font-weight: 700;
+            color: #1a1a1a;
+          }
+          .instructor-detail-bio {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e0e7ff;
+            color: #4b5563;
+            line-height: 1.6;
+            font-size: 15px;
+          }
+          .message-suggestions {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #e5e7eb;
+          }
+          .message-suggestions-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #6b7280;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .suggestion-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+          }
+          .suggestion-chip {
+            padding: 8px 14px;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 20px;
+            font-size: 13px;
+            color: #4b5563;
+            cursor: pointer;
+            transition: all 0.2s ease;
+          }
+          .suggestion-chip:hover {
+            background: #e5e7eb;
+            border-color: #d1d5db;
+            transform: translateY(-1px);
+          }
         `}</style>
       </Head>
 
       <div className="container">
         <div className="header">
-        <h1>FrostDesk</h1>
+          <h1>FrostDesk</h1>
           <p>Book a lesson in under 2 minutes</p>
-          </div>
+        </div>
 
-        <div className="main-content">
-          {/* Instructor List Panel */}
-          <div className="panel">
-            <h2>Select an Instructor</h2>
-            {instructorsLoading ? (
-              <div className="loading">Loading instructors...</div>
-            ) : instructors.length === 0 ? (
-              <div className="empty-state">No instructors available</div>
-            ) : (
-              <div className="instructor-list">
-                {instructors.map((instructor) => {
-                  const badges = getInstructorBadges(instructor.bio);
-                  const isSelected = selectedInstructorId === instructor.id;
-                  return (
-                    <div
-                      key={instructor.id}
-                      className={`instructor-item ${isSelected ? "selected" : ""}`}
-                      onClick={() => handleInstructorSelect(instructor.id)}
-                    >
-                      <div className="instructor-avatar">
-                        {instructor.photo_url ? (
-                          <img src={instructor.photo_url} alt={instructor.name} />
-                        ) : (
-                          getInstructorInitials(instructor.name)
-                        )}
-              </div>
-                      <div className="instructor-info">
-                        <div className="instructor-name">{instructor.name}</div>
-                        {instructor.bio && (
-                          <p className="instructor-bio">{instructor.bio}</p>
-                        )}
-                        {badges.length > 0 && (
-                          <div className="instructor-badges">
-                            {badges.map((badge) => (
-                              <span key={badge} className="badge">
-                                {badge}
-                              </span>
-                ))}
-              </div>
-            )}
-          </div>
+        {/* Client Info Form */}
+        {showClientForm && (
+          <form className="client-form" onSubmit={handleClientFormSubmit}>
+            <h2>Tell us about yourself</h2>
+            <div className="form-group">
+              <label htmlFor="client-name">Your Name *</label>
+              <input
+                id="client-name"
+                type="text"
+                value={clientName}
+                onChange={(e) => setClientNameState(e.target.value)}
+                placeholder="Enter your name"
+                required
+                maxLength={100}
+              />
             </div>
-                  );
-                })}
-          </div>
+            <div className="form-group">
+              <label htmlFor="client-phone">Phone Number *</label>
+              <input
+                id="client-phone"
+                type="tel"
+                value={clientPhone}
+                onChange={(e) => setClientPhoneState(e.target.value)}
+                placeholder="+39 123 456 7890"
+                required
+                maxLength={20}
+              />
+            </div>
+            <button type="submit" className="form-submit">
+              Continue
+            </button>
+          </form>
         )}
-      </div>
+
+        {!showClientForm && (
+          <div className="main-content">
+            {/* Instructor Selection Panel */}
+            <div className="panel">
+              <h2>Select an Instructor</h2>
+              {instructorsLoading ? (
+                <div className="loading">Loading instructors...</div>
+              ) : instructors.length === 0 ? (
+                <div className="empty-state">No instructors available</div>
+              ) : (
+                <>
+                  <select
+                    className="instructor-select"
+                    value={selectedInstructorId || ""}
+                    onChange={(e) => handleInstructorSelect(e.target.value)}
+                  >
+                    <option value="">-- Select an instructor --</option>
+                    {instructors.map((instructor) => (
+                      <option key={instructor.id} value={instructor.id}>
+                        {instructor.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedInstructor && (
+                    <div className="instructor-detail">
+                      <div className="instructor-detail-header">
+                        <div className="instructor-detail-avatar">
+                          {selectedInstructor.photo_url ? (
+                            <img src={selectedInstructor.photo_url} alt={selectedInstructor.name} />
+                          ) : (
+                            getInstructorInitials(selectedInstructor.name)
+                          )}
+                        </div>
+                        <div className="instructor-detail-info">
+                          <h3>{selectedInstructor.name}</h3>
+                          {getInstructorBadges(selectedInstructor.bio).length > 0 && (
+                            <div className="instructor-badges">
+                              {getInstructorBadges(selectedInstructor.bio).map((badge) => (
+                                <span key={badge} className="badge">
+                                  {badge}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {selectedInstructor.bio && (
+                        <div className="instructor-detail-bio">
+                          {selectedInstructor.bio}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
 
           {/* Chat Widget Panel */}
           <div className="panel">
@@ -1029,18 +1273,39 @@ export default function Home() {
             )}
           </div>
 
+              <div className="message-suggestions">
+                <div className="message-suggestions-title">💡 Suggested Messages</div>
+                <div className="suggestion-chips">
+                  {messageSuggestions.map((suggestion, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      className="suggestion-chip"
+                      onClick={() => {
+                        if (selectedInstructor && !chatSending) {
+                          setChatInput(suggestion);
+                        }
+                      }}
+                      disabled={!selectedInstructor || chatSending}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="chat-input-area">
-            {/* Honeypot field - hidden from users, bots will fill it */}
-            <input
+                {/* Honeypot field - hidden from users, bots will fill it */}
+                <input
                   ref={honeypotFieldRef}
                   type="text"
                   name="website"
                   style={{ display: 'none' }}
                   tabIndex={-1}
-              autoComplete="off"
+                  autoComplete="off"
                   aria-hidden="true"
                 />
-            <input
+                <input
                   className="chat-input"
                   type="text"
                   placeholder={
@@ -1050,9 +1315,9 @@ export default function Home() {
                   }
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={(e) => {
+                  onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
+                      e.preventDefault();
                       handleChatSend();
                     }
                   }}
@@ -1065,8 +1330,8 @@ export default function Home() {
                   disabled={!selectedInstructor || chatSending || !chatInput.trim()}
                 >
                   {chatSending ? "..." : "Send"}
-            </button>
-          </div>
+                </button>
+              </div>
 
               {showWhatsAppCTA && (
                 <button className="whatsapp-cta" onClick={handleWhatsAppClick}>
@@ -1084,7 +1349,8 @@ export default function Home() {
         </div>
             </div>
           </div>
-        </div>
+          </div>
+        )}
 
         <footer className="footer">
           <Link href="/privacy">Privacy Policy</Link>
