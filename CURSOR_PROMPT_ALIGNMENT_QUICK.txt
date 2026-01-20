@@ -1,0 +1,133 @@
+PROJECT: [ORCHESTRATOR|LANDING|MAIN_APP] - Sostituisci con il nome del progetto
+
+🎯 OBIETTIVO: Allineare il flusso AI per usare TUTTI i dati inseriti dall'istruttore (servizi, meeting points, regole, policy).
+
+## ⚙️ SE PROJECT = ORCHESTRATOR
+
+FILE: supabase/functions/ingest-inbound/index.ts
+
+AZIONE: Modificare `generateImmediateAIReply()` per recuperare e usare:
+- instructor_services (is_active=true)
+- instructor_meeting_points (is_active=true)  
+- instructor_rules (is_active=true)
+
+CODICE DA AGGIUNGERE (dopo recupero instructor, ~linea 650):
+
+```typescript
+// Recupera servizi
+const { data: services } = await supabase
+  .from("instructor_services")
+  .select("*")
+  .eq("instructor_id", instructorData.id)
+  .eq("is_active", true)
+  .order("display_order", { ascending: true, nullsFirst: false });
+
+// Recupera meeting points
+const { data: meetingPoints } = await supabase
+  .from("instructor_meeting_points")
+  .select("*")
+  .eq("instructor_id", instructorData.id)
+  .eq("is_active", true)
+  .order("display_order", { ascending: true, nullsFirst: false });
+
+// Recupera regole
+const { data: rules } = await supabase
+  .from("instructor_rules")
+  .select("*")
+  .eq("instructor_id", instructorData.id)
+  .eq("is_active", true)
+  .order("display_order", { ascending: true, nullsFirst: false});
+
+const servicesList = services || [];
+const meetingPointsList = meetingPoints || [];
+const rulesList = rules || [];
+```
+
+MODIFICARE buildRAGPrompt() per includere questi dati:
+
+```typescript
+const ragPrompt = buildRAGPrompt(
+  userMessage,
+  instructorData,
+  chunks,
+  servicesList,      // ✅ AGGIUNGI
+  meetingPointsList, // ✅ AGGIUNGI
+  rulesList          // ✅ AGGIUNGI
+);
+```
+
+FILE: supabase/functions/_shared/ragSearch.ts
+
+AZIONE: Modificare `buildRAGPrompt()` per accettare e includere services, meeting_points, rules nel prompt.
+
+SIGNATURE AGGIORNATA:
+```typescript
+export function buildRAGPrompt(
+  userMessage: string,
+  instructorData: { id: string; name?: string; email?: string; metadata?: Record<string, unknown> },
+  chunks: Array<{chunk_text: string; doc_title: string; similarity: number}>,
+  services?: Array<{service_name: string; description?: string; price?: number; duration?: number; currency?: string}>,
+  meetingPoints?: Array<{name: string; address?: string; coordinates?: {lat: number; lng: number}; what3words?: string}>,
+  rules?: Array<{rule_type: string; rule_title: string; rule_description?: string}>
+): string
+```
+
+FORMATO PROMPT:
+```
+INSTRUCTOR INFORMATION:
+- Name: ...
+- Email: ...
+
+SERVICES OFFERED:
+1. Service Name: Description - Price: X EUR, Duration: Y minutes
+...
+
+MEETING POINTS:
+1. Point Name: Address (Coordinates: ...)
+...
+
+RULES:
+1. rule_type: rule_title - rule_description
+...
+
+RELEVANT POLICY INFORMATION:
+[1] From: Doc Title (relevance: X%)
+...
+
+CUSTOMER MESSAGE:
+...
+```
+
+## 🌐 SE PROJECT = LANDING
+
+VERIFICA:
+- [ ] Chiamata include `instructor_id` nel payload
+- [ ] Header `x-fd-ingest-key` è configurato
+- [ ] Gestisce `replyText` nella risposta
+- [ ] Gestisce `handoff_to_human` flag
+- [ ] Gestisce errori (401, 400, 503, 500)
+
+## 📱 SE PROJECT = MAIN_APP
+
+VERIFICA SALVATAGGIO:
+- [ ] `instructor_services` con `is_active`, `display_order`
+- [ ] `instructor_meeting_points` con `is_active`, `display_order`
+- [ ] `instructor_rules` con `is_active`, `display_order`
+- [ ] Policy docs vengono chunkizzati automaticamente
+
+## ✅ CHECKLIST
+
+ORCHESTRATOR:
+- [ ] Recupera services, meeting_points, rules
+- [ ] buildRAGPrompt include tutti i dati
+- [ ] Gestisce dati vuoti gracefully
+- [ ] Test: AI risponde usando servizi/meeting points/regole
+
+LANDING:
+- [ ] Gestisce replyText
+- [ ] Gestisce handoff_to_human
+- [ ] Gestisce errori
+
+MAIN_APP:
+- [ ] Salva tutti i dati in Supabase
+- [ ] Dati sono is_active=true per default
