@@ -69,11 +69,41 @@ For questions or collaboration:
 
 ---
 
-## 🛠️ Environment variables
+## 🛠️ Environment and deployment
 
-The landing page talks to Supabase via `/api/instructors`; this route runs server-side and requires the following env vars:
+The landing chat proxy lives in `/api/ingest-inbound` on Vercel and talks to FrostDesk’s orchestrator by injecting `x-fd-ingest-key`.
+The following variables must be configured in every environment (local, staging, production):
 
-- `SUPABASE_URL` – the full URL of your Supabase project (service role endpoint).
-- `SUPABASE_SERVICE_ROLE_KEY` – the service role key, never exposed to the browser.
+- `SUPABASE_URL` – the service role Supabase endpoint used in `/api/instructors`.
+- `SUPABASE_SERVICE_ROLE_KEY` – the secret service role key for Supabase data access (do **not** expose this to the browser).
+- `FD_INGEST_KEY` – the secret FrostDesk ingest key that the Next.js API route will forward to the orchestrator.
+- `NEXT_PUBLIC_SUPABASE_INGEST_URL` – the Supabase Edge Function URL that `/api/ingest-inbound` should proxy.
+- `NEXT_PUBLIC_WA_LINK` – fallback WhatsApp deeplink if an instructor does not publish a number.
 
-If either value is missing, `/api/instructors` responds with HTTP 500 and a clear log message telling you which variable is absent.
+Optional vars:
+
+- `NEXT_PUBLIC_FD_DEV_FAKE_AI` – set to `1` locally to simulate an assistant response without hitting the orchestrator.
+
+The shipped `.env.local.example` contains these identifiers and serves as a template for editors or Vercel’s UI.
+
+### Deploy on Vercel
+
+1. Sign in: `npx vercel login` (or use the Vercel dashboard).
+2. Run `npx vercel --prod` from this directory for the first deployment; Vercel will prompt for the project name and root directory (typically `.`).
+3. In the Vercel dashboard, set the env vars listed above under Settings → Environment Variables (remember to add both Preview and Production values).
+4. Vercel runs `npm run build` automatically; once it succeeds the `/api/**` routes are live and wired to the configured env vars.
+
+> **Tip:** always run `npx vercel` from the `fd-landing-message-clean` directory (for example `cd /Users/federiconovello/Desktop/FD-Landing-message-clean && npx vercel --prod`) rather than from your home folder so Vercel picks up the correct root.
+
+### Smoke test (curl)
+
+From the project root, exercise the ingest proxy to verify the deployment reads the `FD_INGEST_KEY`:
+
+```
+curl -X POST https://<your-vercel-url>/api/ingest-inbound \
+  -H "Content-Type: application/json" \
+  -H "x-fd-ingest-key: $FD_INGEST_KEY" \
+  -d '{"external_thread_id":"land:web:test:1","content":"test","role":"user"}'
+```
+
+Expect the orchestrator JSON to flow straight through (the response should match the Supabase Edge Function payload). You can also hit `/api/debug/env` to confirm the public env vars (`NEXT_PUBLIC_SUPABASE_INGEST_URL`, `NEXT_PUBLIC_WA_LINK`, `NEXT_PUBLIC_FD_DEV_FAKE_AI`, etc.) are available on Vercel without leaking secrets.

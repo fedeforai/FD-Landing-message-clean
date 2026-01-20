@@ -1,0 +1,253 @@
+{
+  "scenario_name": "FrostDesk AI Reply",
+  "description": "Processes ai_reply tasks: gets instructor context, generates AI reply, sends via ingest-inbound",
+  "trigger": {
+    "type": "supabase_webhook",
+    "table": "tasks",
+    "event": "insert",
+    "filter": "task_type = 'ai_reply' AND status = 'pending'"
+  },
+  "modules": [
+    {
+      "id": 1,
+      "name": "Webhook Trigger",
+      "type": "supabase_webhook",
+      "config": {
+        "table": "tasks",
+        "event": "insert"
+      }
+    },
+    {
+      "id": 2,
+      "name": "Extract Task Data",
+      "type": "data_mapper",
+      "config": {
+        "mapping": {
+          "task_id": "{{body.id}}",
+          "conversation_id": "{{body.conversation_id}}",
+          "instructor_id": "{{body.metadata.instructor_id}}",
+          "trace_id": "{{body.metadata.trace_id}}",
+          "external_thread_id": "{{body.metadata.external_thread_id}}"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Get Instructor Context",
+      "type": "http_request",
+      "config": {
+        "method": "POST",
+        "url": "https://{{SUPABASE_URL}}/functions/v1/get-instructor-context",
+        "headers": {
+          "Content-Type": "application/json",
+          "x-fd-ingest-key": "{{FD_INGEST_KEY}}",
+          "x-request-id": "{{trace_id}}"
+        },
+        "body": {
+          "conversation_id": "{{conversation_id}}",
+          "instructor_id": "{{instructor_id}}"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Check Handoff",
+      "type": "router",
+      "config": {
+        "routes": [
+          {
+            "condition": "{{response.concierge_context.handoff_to_human}} === true",
+            "action": "stop",
+            "message": "Conversation handed off to human. Stopping."
+          },
+          {
+            "condition": "default",
+            "action": "continue"
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "name": "OpenAI JSON Strict",
+      "type": "openai_chat",
+      "config": {
+        "model": "gpt-4-turbo-preview",
+        "system_prompt": "You are a concierge AI assistant for FrostDesk, helping potential students book lessons with instructors. Use the provided instructor context and policy documents to answer questions accurately. Always respond in JSON format with the following schema:\n\n{\n  \"reply_text\": string (required, max 500 chars),\n  \"confidence_score\": number (0-1, required),\n  \"suggested_actions\": array of strings (optional, e.g. [\"book_lesson\", \"ask_availability\"]),\n  \"handoff_reason\": string (optional, only if confidence_score < 0.5 or user requests human)\n}\n\nIf confidence_score < 0.5 or user explicitly requests human, set handoff_reason.",
+        "user_message": "Instructor: {{concierge_context.instructor_name}}\nBio: {{concierge_context.instructor_bio}}\n\nLast message: {{concierge_context.last_message_text}}\n\nPolicy documents:\n{{#each concierge_context.policy_documents}}\n- {{title}} (v{{version}})\n{{#each chunks}}\n  - {{content}}\n{{/each}}\n{{/each}}\n\nGenerate a helpful reply.",
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "concierge_reply",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "reply_text": {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                "confidence_score": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "suggested_actions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "handoff_reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["reply_text", "confidence_score"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Parse JSON Response",
+      "type": "json_parser",
+      "config": {
+        "source": "{{openai_response.choices[0].message.content}}"
+      }
+    },
+    {
+      "id": 7,
+      "name": "Check Handoff Reason",
+      "type": "router",
+      "config": {
+        "routes": [
+          {
+            "condition": "{{parsed_json.handoff_reason}} exists OR {{parsed_json.confidence_score}} < 0.5",
+            "action": "update_conversation_handoff",
+            "message": "Low confidence or handoff requested"
+          },
+          {
+            "condition": "default",
+            "action": "send_reply"
+          }
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "name": "Update Conversation Handoff",
+      "type": "supabase_update",
+      "config": {
+        "table": "conversation_threads",
+        "id": "{{conversation_id}}",
+        "data": {
+          "handoff_to_human": true
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Send Reply via ingest-inbound",
+      "type": "http_request",
+      "config": {
+        "method": "POST",
+        "url": "https://{{SUPABASE_URL}}/functions/v1/ingest-inbound",
+        "headers": {
+          "Content-Type": "application/json",
+          "x-fd-ingest-key": "{{FD_INGEST_KEY}}",
+          "x-request-id": "{{trace_id}}"
+        },
+        "body": {
+          "channel": "landing",
+          "external_thread_id": "{{external_thread_id}}",
+          "instructor_id": "{{instructor_id}}",
+          "text": "{{parsed_json.reply_text}}",
+          "trace_id": "{{trace_id}}",
+          "external_message_id": "make_reply_{{timestamp}}_{{random}}",
+          "metadata": {
+            "source": "make_ai_reply",
+            "confidence_score": "{{parsed_json.confidence_score}}",
+            "suggested_actions": "{{parsed_json.suggested_actions}}"
+          }
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Optional: Google Calendar Action",
+      "type": "router",
+      "config": {
+        "routes": [
+          {
+            "condition": "{{parsed_json.suggested_actions}} contains 'book_lesson'",
+            "action": "create_calendar_event"
+          },
+          {
+            "condition": "default",
+            "action": "skip"
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "name": "Create Calendar Event",
+      "type": "google_calendar_create",
+      "config": {
+        "summary": "Lesson Request - {{concierge_context.instructor_name}}",
+        "description": "Student inquiry via FrostDesk chat",
+        "start": "{{next_available_slot}}",
+        "end": "{{next_available_slot + 1 hour}}"
+      }
+    },
+    {
+      "id": 12,
+      "name": "Update Task Status",
+      "type": "supabase_update",
+      "config": {
+        "table": "tasks",
+        "id": "{{task_id}}",
+        "data": {
+          "status": "completed",
+          "metadata": {
+            "completed_at": "{{now}}",
+            "reply_sent": true,
+            "trace_id": "{{trace_id}}"
+          }
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Log Event",
+      "type": "supabase_insert",
+      "config": {
+        "table": "conversation_events",
+        "data": {
+          "conversation_id": "{{conversation_id}}",
+          "event_type": "make_ai_reply_completed",
+          "metadata": {
+            "trace_id": "{{trace_id}}",
+            "task_id": "{{task_id}}",
+            "confidence_score": "{{parsed_json.confidence_score}}"
+          }
+        }
+      }
+    }
+  ],
+  "error_handling": {
+    "get_instructor_context_failure": {
+      "action": "update_task_failed",
+      "log_event": true
+    },
+    "openai_failure": {
+      "action": "update_task_failed",
+      "log_event": true
+    },
+    "ingest_inbound_failure": {
+      "action": "retry_3_times_then_fail",
+      "log_event": true
+    }
+  }
+}

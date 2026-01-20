@@ -1,19 +1,26 @@
+const SAFE_ENVS = [
+  "NEXT_PUBLIC_SUPABASE_INGEST_URL",
+  "NEXT_PUBLIC_WA_LINK",
+  "NEXT_PUBLIC_FD_DEV_FAKE_AI",
+  "VERCEL_ENV",
+  "NODE_ENV",
+];
+
 export default function handler(req, res) {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
-    return res.status(405).json({ ok: false, error: "Method not allowed" });
+  // Disable in production for security
+  if (process.env.NODE_ENV === "production") {
+    return res.status(404).json({ ok: false, error: "Not found" });
   }
 
-  const hasSupabaseUrl = Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL);
-  const hasServiceRoleKey = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const hasAnonKey = Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-  const orchUrlPresent = Boolean(process.env.ORCH_URL);
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ ok: false, error: "GET only" });
+  }
 
-  return res.status(200).json({
-    ok: true,
-    hasSupabaseUrl,
-    hasServiceRoleKey,
-    hasAnonKey,
-    orchUrlPresent,
-  });
+  const payload = {};
+  for (const key of SAFE_ENVS) {
+    payload[key] = process.env[key] ?? null;
+  }
+
+  return res.status(200).json({ ok: true, env: payload });
 }
