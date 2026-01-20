@@ -74,13 +74,14 @@ export default function Home() {
       setInstructors(list);
       setInstructorsLoading(false);
 
-      // Restore client info from localStorage
+      // Restore client info from localStorage (but always show form to allow editing)
       const savedName = getClientName();
       const savedPhone = getClientPhone();
       if (savedName && savedPhone) {
         setClientNameState(savedName);
         setClientPhoneState(savedPhone);
-        setShowClientForm(false);
+        // Always show form to allow user to edit their info
+        // setShowClientForm(false); // Commented out - always show form
       }
 
       // Restore selected instructor from localStorage
