@@ -274,35 +274,50 @@ export default async function handler(req, res) {
         console.error('[ERROR] trace_id missing, cannot set x-request-id header');
       }
 
+      // Log payload being sent (without sensitive data)
+      console.log('[INGEST] Sending to Orchestrator:', {
+        edgeFunctionUrl,
+        payload: {
+          channel: payload.channel,
+          external_thread_id: payload.external_thread_id,
+          instructor_id: payload.instructor_id,
+          text_length: payload.text?.length || 0,
+          has_idempotency_key: !!payload.idempotency_key,
+          has_channel_metadata: !!payload.channel_metadata,
+          trace_id: payload.trace_id,
+          external_message_id: payload.external_message_id,
+        },
+      });
+
       const upstreamRes = await fetch(edgeFunctionUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
           "x-fd-ingest-key": fdIngestKey, // Server-side secret, never exposed to client
           "x-request-id": traceId, // ✅ Include trace_id as request ID header (sempre presente)
-        },
+      },
         body: JSON.stringify(payload),
         signal: controller.signal,
-      });
+    });
       
       clearTimeout(timeoutId);
 
-      const text = await upstreamRes.text();
-      const contentType = upstreamRes.headers.get("content-type") || "";
-      let parsed;
-      if (contentType.includes("application/json")) {
-        try {
-          parsed = JSON.parse(text);
-        } catch (err) {
+    const text = await upstreamRes.text();
+    const contentType = upstreamRes.headers.get("content-type") || "";
+    let parsed;
+    if (contentType.includes("application/json")) {
+      try {
+        parsed = JSON.parse(text);
+      } catch (err) {
           if (Sentry) {
             Sentry.captureException(err, {
               tags: { error_code: 'PARSE_ERROR' },
               extra: { trace_id: traceId, response_text: text.substring(0, 500), attempt },
             });
           }
-          console.error("Unable to parse orchestrator response as JSON:", err);
-        }
+        console.error("Unable to parse orchestrator response as JSON:", err);
       }
+    }
 
       // Success case
       if (upstreamRes.ok && parsed) {
@@ -389,23 +404,23 @@ export default async function handler(req, res) {
         attempts: attempt + 1,
         edgeFunctionUrl: `${supabaseUrl.replace(/\/$/, "")}/functions/v1/ingest-inbound`,
       });
-      
-      if (parsed) {
+
+    if (parsed) {
         return res.status(upstreamRes.status).json({
           ok: false,
           error: parsed.error || lastError || `HTTP ${upstreamRes.status}`,
           trace_id: parsed.trace_id || traceId,
           error_code: parsed.error_code || 'UPSTREAM_ERROR',
         });
-      }
+    }
 
-      return res.status(upstreamRes.status).json({
+    return res.status(upstreamRes.status).json({
         ok: false,
         error: lastError || `HTTP ${upstreamRes.status}`,
         trace_id: traceId,
         error_code: 'UPSTREAM_ERROR',
-      });
-    } catch (err) {
+    });
+  } catch (err) {
       clearTimeout(timeoutId);
       
       // Log to Sentry
@@ -475,7 +490,7 @@ export default async function handler(req, res) {
         });
       }
 
-      console.error("Error proxying to orchestrator:", err);
+    console.error("Error proxying to orchestrator:", err);
       console.error("Error details:", {
         trace_id: traceId,
         external_message_id: external_message_id,
@@ -486,9 +501,9 @@ export default async function handler(req, res) {
         hasSupabaseUrl: !!supabaseUrl,
         attempts: attempt + 1,
       });
-      return res.status(502).json({
-        ok: false,
-        error: err && err.message ? err.message : "Failed to reach the orchestrator",
+    return res.status(502).json({
+      ok: false,
+      error: err && err.message ? err.message : "Failed to reach the orchestrator",
         trace_id: traceId,
         error_code: 'NETWORK_ERROR',
       });
