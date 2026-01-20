@@ -147,6 +147,7 @@ export default async function handler(req, res) {
     external_message_id: clientExternalMessageId,
     submit_time,
     honeypot,
+    channel_metadata,
   } = body;
   
   // Generate external_message_id if missing (prefix "landing_")
@@ -232,6 +233,7 @@ export default async function handler(req, res) {
     idempotency_key: idempotency_key || null,
     trace_id: traceId, // Sempre presente (client o server-generated)
     external_message_id: external_message_id, // Sempre presente per idempotenza
+    channel_metadata: channel_metadata || null, // Include client name and phone if provided
   };
 
   // Import Sentry for error logging
@@ -454,6 +456,16 @@ export default async function handler(req, res) {
       }
 
       console.error("Error proxying to orchestrator:", err);
+      console.error("Error details:", {
+        trace_id: traceId,
+        external_message_id: external_message_id,
+        external_thread_id: payload.external_thread_id,
+        instructor_id: payload.instructor_id,
+        edgeFunctionUrl: `${supabaseUrl.replace(/\/$/, "")}/functions/v1/ingest-inbound`,
+        hasFdIngestKey: !!fdIngestKey,
+        hasSupabaseUrl: !!supabaseUrl,
+        attempts: attempt + 1,
+      });
       return res.status(502).json({
         ok: false,
         error: err && err.message ? err.message : "Failed to reach the orchestrator",
