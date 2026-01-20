@@ -1,0 +1,131 @@
+REPO: Orchestrator (Supabase Edge Functions)
+FILE: supabase/functions/ingest-inbound/index.ts
+
+PROBLEMA CRITICO:
+L'Edge Function `ingest-inbound` sta fallendo con BOOT_ERROR:
+```json
+{
+  "code": "BOOT_ERROR",
+  "message": "Function failed to start (please check logs)"
+}
+```
+
+Questo significa che la funzione non riesce nemmeno ad avviarsi, probabilmente per:
+1. Moduli `_shared` mancanti o non deployati
+2. Variabili d'ambiente mancanti
+3. Errori di sintassi o import
+4. Dipendenze non risolte
+
+REQUISITI:
+1. Verificare che tutti i moduli `_shared` esistano e siano deployati:
+   - `../_shared/logger.ts`
+   - `../_shared/security.ts`
+   - `../_shared/ragSearch.ts`
+2. Verificare che tutte le variabili d'ambiente siano configurate:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_ANON_KEY` (per JWT validation)
+   - `FD_INGEST_KEY` o `INGEST_SHARED_SECRET`
+   - `OPENAI_API_KEY` (per AI replies)
+3. Assicurarsi che la funzione generi `replyText` immediatamente per messaggi utente (come richiesto dalla Landing)
+4. Gestire correttamente gli errori per evitare crash all'avvio
+
+AZIONI RICHIESTE:
+
+1. VERIFICA STRUTTURA FILE:
+   - Controlla che esista `supabase/functions/_shared/logger.ts`
+   - Controlla che esista `supabase/functions/_shared/security.ts`
+   - Controlla che esista `supabase/functions/_shared/ragSearch.ts`
+   - Se mancano, creali o rimuovi gli import se non necessari
+
+2. VERIFICA VARIABILI D'AMBIENTE:
+   - Vai su Supabase Dashboard → Project Settings → Edge Functions → Secrets
+   - Verifica che siano presenti:
+     * `SUPABASE_URL` (può essere derivato automaticamente, ma meglio esplicito)
+     * `SUPABASE_SERVICE_ROLE_KEY`
+     * `SUPABASE_ANON_KEY` (se usato per JWT validation)
+     * `FD_INGEST_KEY` (deve corrispondere a quello su Vercel)
+     * `OPENAI_API_KEY` (per generare risposte AI)
+   - Se mancano, aggiungile
+
+3. VERIFICA IMPORT E DIPENDENZE:
+   - Controlla che tutti gli import siano corretti
+   - Verifica che le versioni delle dipendenze siano compatibili
+   - Controlla che `deno.json` o `import_map.json` siano configurati correttamente
+
+4. TEST LOCALE (se possibile):
+   ```bash
+   supabase functions serve ingest-inbound
+   ```
+   - Verifica che la funzione si avvii senza errori
+   - Controlla i log per errori di sintassi o import
+
+5. DEPLOY E TEST:
+   - Deploy l'Edge Function su Supabase
+   - Testa con una richiesta dalla Landing
+   - Verifica che `replyText` sia presente nella risposta
+
+CODICE MINIMO DI TEST:
+Se la funzione non si avvia, crea una versione minimale per testare:
+
+```typescript
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+
+Deno.serve(async (req: Request) => {
+  try {
+    // Verifica variabili d'ambiente
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const sharedSecret = Deno.env.get("FD_INGEST_KEY") || Deno.env.get("INGEST_SHARED_SECRET");
+
+    if (!supabaseUrl || !supabaseKey) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Missing Supabase configuration" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Verifica autenticazione
+    const ingestKey = req.headers.get("x-fd-ingest-key");
+    if (!ingestKey || ingestKey !== sharedSecret) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Unauthorized" }),
+        { status: 401, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // Parse body
+    const body = await req.json();
+    
+    // Restituisci risposta di test
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        trace_id: body.trace_id || "test",
+        conversation_id: null,
+        replyText: "Test reply - function is working",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    return new Response(
+      JSON.stringify({ ok: false, error: error.message }),
+      { status: 500, headers: { "Content-Type": "application/json" } }
+    );
+  }
+});
+```
+
+Se questa versione minimale funziona, aggiungi gradualmente le funzionalità complete.
+
+PRIORITÀ:
+1. **CRITICO**: Verifica che i moduli `_shared` esistano
+2. **CRITICO**: Verifica che tutte le variabili d'ambiente siano configurate
+3. **IMPORTANTE**: Assicurati che `generateImmediateAIReply` funzioni correttamente
+4. **IMPORTANTE**: Verifica che `replyText` sia sempre restituito per messaggi utente
+
+TEST POST-FIX:
+1. Invia un messaggio dalla Landing
+2. Verifica che la risposta includa `replyText`
+3. Controlla i log di Supabase per errori
+4. Verifica che il messaggio AI appaia nella chat
