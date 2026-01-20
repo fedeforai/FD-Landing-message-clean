@@ -110,9 +110,9 @@ export default function Home() {
     e.preventDefault();
     if (!clientName.trim() || !clientPhone.trim()) {
       alert("Please fill in both name and phone number");
-      return;
-    }
-    
+          return;
+        }
+
     setClientName(clientName.trim());
     setClientPhone(clientPhone.trim());
     setShowClientForm(false);
@@ -193,8 +193,8 @@ export default function Home() {
 
     if (!selectedInstructorId) {
       alert("Please select an instructor first");
-        return;
-      }
+      return;
+    }
 
     // Rate limiting check
     const now = Date.now();
@@ -234,6 +234,18 @@ export default function Home() {
     // Check if honeypot field was filled (bots will fill it)
     const honeypot = honeypotFieldRef.current ? honeypotFieldRef.current.value : "";
 
+    // Validate payload before sending
+    if (!threadId || !selectedInstructorId || !text || !traceId) {
+      console.error('[CLIENT] Missing required fields before send:', {
+        has_threadId: !!threadId,
+        has_instructorId: !!selectedInstructorId,
+        has_text: !!text,
+        has_traceId: !!traceId,
+      });
+      alert("Missing required information. Please refresh the page and try again.");
+      return;
+    }
+
     // Add user message immediately with state machine
     const userMessage = {
       role: "user",
@@ -247,6 +259,18 @@ export default function Home() {
     setChatMessages((prev) => [...prev, userMessage]);
     setChatInput("");
     setChatSending(true);
+
+    // Log payload being sent
+    console.log('[CLIENT] Sending message payload:', {
+      external_thread_id: threadId,
+      instructor_id: selectedInstructorId,
+      text_length: text.length,
+      has_idempotency_key: !!idempotencyKey,
+      trace_id: traceId,
+      external_message_id: externalMessageId,
+      has_client_name: !!clientName,
+      has_client_phone: !!clientPhone,
+    });
 
     // Log to Sentry (non-blocking)
     Sentry.addBreadcrumb({
@@ -369,7 +393,7 @@ export default function Home() {
             },
           ]);
           setMessageCount((prev) => prev + 1);
-        } else {
+      } else {
           // No immediate reply - show waiting state
           console.log('[CLIENT] No replyText received, showing waiting message');
           updateMessageState(idempotencyKey, { state: "waiting" });

@@ -118,6 +118,7 @@ export default async function handler(req, res) {
   // Get Supabase URL and ingest key (server-side only, never exposed to client)
   const supabaseUrl = process.env.SUPABASE_URL;
   if (!supabaseUrl) {
+    console.error('[INGEST] Missing SUPABASE_URL environment variable', { trace_id: traceId });
     return res.status(500).json({
       ok: false,
       error: "Missing SUPABASE_URL in environment",
@@ -128,6 +129,7 @@ export default async function handler(req, res) {
 
   const fdIngestKey = process.env.FD_INGEST_KEY;
   if (!fdIngestKey) {
+    console.error('[INGEST] Missing FD_INGEST_KEY environment variable', { trace_id: traceId });
     return res.status(500).json({
       ok: false,
       error: "Missing FD_INGEST_KEY in environment",
@@ -135,6 +137,14 @@ export default async function handler(req, res) {
       error_code: 'MISSING_CONFIG',
     });
   }
+
+  console.log('[INGEST] Environment check passed', {
+    trace_id: traceId,
+    has_supabase_url: !!supabaseUrl,
+    supabase_url_length: supabaseUrl?.length || 0,
+    has_fd_ingest_key: !!fdIngestKey,
+    fd_ingest_key_length: fdIngestKey?.length || 0,
+  });
 
   // Strict payload validation
   const body = req.body || {};
@@ -153,38 +163,71 @@ export default async function handler(req, res) {
   // Generate external_message_id if missing (prefix "landing_")
   const external_message_id = clientExternalMessageId || generateExternalMessageId();
 
-  // Validate required fields
+  // Validate required fields with detailed logging
+  console.log('[INGEST] Validating payload:', {
+    trace_id: traceId,
+    has_channel: !!channel,
+    channel_value: channel,
+    has_external_thread_id: !!external_thread_id,
+    external_thread_id_type: typeof external_thread_id,
+    external_thread_id_length: external_thread_id?.length,
+    has_instructor_id: !!instructor_id,
+    instructor_id_type: typeof instructor_id,
+    has_text: !!text,
+    text_type: typeof text,
+    text_length: text?.length,
+    body_keys: Object.keys(body),
+  });
+
   if (!channel || channel !== 'landing') {
+    console.error('[INGEST] Validation failed: INVALID_CHANNEL', { channel, trace_id: traceId });
     return res.status(400).json({
       ok: false,
-      error: "Invalid or missing channel. Must be 'landing'",
+      error: `Invalid or missing channel. Must be 'landing', got: ${channel || 'undefined'}`,
       trace_id: traceId,
       error_code: 'INVALID_CHANNEL',
     });
   }
 
   if (!external_thread_id || typeof external_thread_id !== 'string' || external_thread_id.length > 255) {
+    console.error('[INGEST] Validation failed: INVALID_THREAD_ID', { 
+      external_thread_id, 
+      type: typeof external_thread_id,
+      length: external_thread_id?.length,
+      trace_id: traceId 
+    });
     return res.status(400).json({
       ok: false,
-      error: "Invalid or missing external_thread_id",
+      error: `Invalid or missing external_thread_id. Type: ${typeof external_thread_id}, Length: ${external_thread_id?.length || 0}`,
       trace_id: traceId,
       error_code: 'INVALID_THREAD_ID',
     });
   }
 
   if (!instructor_id || typeof instructor_id !== 'string') {
+    console.error('[INGEST] Validation failed: INVALID_INSTRUCTOR_ID', { 
+      instructor_id, 
+      type: typeof instructor_id,
+      trace_id: traceId 
+    });
     return res.status(400).json({
       ok: false,
-      error: "Invalid or missing instructor_id",
+      error: `Invalid or missing instructor_id. Type: ${typeof instructor_id}`,
       trace_id: traceId,
       error_code: 'INVALID_INSTRUCTOR_ID',
     });
   }
 
   if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    console.error('[INGEST] Validation failed: INVALID_TEXT', { 
+      text: text?.substring(0, 50), 
+      type: typeof text,
+      length: text?.length,
+      trace_id: traceId 
+    });
     return res.status(400).json({
       ok: false,
-      error: "Invalid or missing text",
+      error: `Invalid or missing text. Type: ${typeof text}, Length: ${text?.length || 0}`,
       trace_id: traceId,
       error_code: 'INVALID_TEXT',
     });
@@ -358,6 +401,19 @@ export default async function handler(req, res) {
       lastStatusCode = upstreamRes.status;
       lastError = parsed?.error || text || `HTTP ${upstreamRes.status}`;
       lastResponse = parsed;
+
+      // Detailed error logging
+      console.error('[INGEST] Upstream error:', {
+        trace_id: traceId,
+        external_message_id: external_message_id,
+        status: upstreamRes.status,
+        statusText: upstreamRes.statusText,
+        error: lastError,
+        parsed: parsed,
+        response_text_preview: text?.substring(0, 500),
+        attempt: attempt + 1,
+        edgeFunctionUrl: `${supabaseUrl.replace(/\/$/, "")}/functions/v1/ingest-inbound`,
+      });
 
       // Log error to Sentry
       if (Sentry) {
